@@ -1,10 +1,18 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { PLAN_TIERS, PLAN_TIER_SHORT_LABELS, computePlanTier } from "@/lib/planTier";
-import { computeActiveAccountCount } from "@/lib/contractLines";
+import { ACTIVE_CONTRACT_STATUS, computeActiveAccountCount } from "@/lib/contractLines";
 import { PlanBadge } from "@/components/PlanBadge";
 
 export const dynamic = "force-dynamic";
+
+// Contract.status（このアプリ内だけで使う対応ステータス）の表示用ラベル。
+// ContractLine.contractStatus（契約中/契約前/解約、torimato由来）とは別物。
+const STATUS_LABELS: Record<string, string> = {
+  active: "稼働中",
+  paused: "一時停止",
+  cancelled: "解約",
+};
 
 export default async function ContractsPage({
   searchParams,
@@ -38,10 +46,21 @@ export default async function ContractsPage({
     },
   });
 
-  // アカウント数・プランは契約状態が変わるたびに変わりうるため保存せずここで都度計算する
+  // アカウント数・プランは契約状態が変わるたびに変わりうるため保存せずここで都度計算する。
+  // 会社(Contract)は複数の契約明細(ContractLine)を持ちうるため、一覧には会社単位の集約値のみを
+  // 表示し、個々の契約明細のcontractStatusをそのまま会社のステータスとして出さないようにする。
   const withComputed = contracts.map(({ contractLines, ...c }) => {
     const accountCount = computeActiveAccountCount(contractLines);
-    return { ...c, accountCount, planTier: computePlanTier(accountCount) };
+    const activeLineCount = contractLines.filter(
+      (l) => l.contractStatus === ACTIVE_CONTRACT_STATUS
+    ).length;
+    return {
+      ...c,
+      accountCount,
+      planTier: computePlanTier(accountCount),
+      activeLineCount,
+      totalLineCount: contractLines.length,
+    };
   });
   const visibleContracts = tier
     ? withComputed.filter((c) => c.planTier === tier)
@@ -93,15 +112,16 @@ export default async function ContractsPage({
               <th className="px-4 py-2">会社名</th>
               <th className="px-4 py-2">アカウント数</th>
               <th className="px-4 py-2">プラン</th>
+              <th className="px-4 py-2">契約明細</th>
               <th className="px-4 py-2">担当者/連絡先</th>
               <th className="px-4 py-2">最終対応</th>
-              <th className="px-4 py-2">ステータス</th>
+              <th className="px-4 py-2">対応ステータス</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {visibleContracts.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
                   該当する契約先がありません。
                 </td>
               </tr>
@@ -117,6 +137,9 @@ export default async function ContractsPage({
                 <td className="px-4 py-2">
                   <PlanBadge tier={c.planTier} />
                 </td>
+                <td className="px-4 py-2 text-slate-500">
+                  有効{c.activeLineCount} / 全{c.totalLineCount}件
+                </td>
                 <td className="px-4 py-2 text-slate-600">
                   {c.contactName || "-"}
                   {c.contactEmail ? ` / ${c.contactEmail}` : ""}
@@ -126,7 +149,9 @@ export default async function ContractsPage({
                     ? new Date(c.supportLogs[0].occurredAt).toLocaleDateString("ja-JP")
                     : "未対応"}
                 </td>
-                <td className="px-4 py-2 text-slate-500">{c.status}</td>
+                <td className="px-4 py-2 text-slate-500">
+                  {STATUS_LABELS[c.status] || c.status}
+                </td>
               </tr>
             ))}
           </tbody>

@@ -7,14 +7,18 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// 契約先（会社単位）。アカウント数・サポートプランはContractLineから都度集計する
+// 契約先（会社単位）。アカウント数・サポートプランはContractLineから都度集計する。
+// statusはこのアプリ内だけで管理する対応ステータス（例: active/paused/cancelled）であり、
+// torimatoのCSVが持つContractLine.contractStatus（契約中/契約前/解約）とは完全に別物。
+// CSVインポートからstatusへ値を書き込むことはない。
 model Contract {
   id           String    @id @default(cuid())
   companyName  String
+  externalId   String?   @unique // torimato側の会社・顧客ID（あれば会社名より優先して同一会社の判定に使う）
   contactName  String?
   contactEmail String?
   phone        String?
-  status       String    @default("active") // active | cancelled | paused
+  status       String    @default("active") // active | cancelled | paused（アプリ内でのみ編集）
   notes        String?
   importedAt   DateTime  @default(now())
   updatedAt    DateTime  @updatedAt

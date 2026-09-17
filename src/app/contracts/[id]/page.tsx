@@ -80,6 +80,12 @@ export default async function ContractDetailPage({
             <dt className="text-slate-500">取り込み日</dt>
             <dd>{new Date(contract.importedAt).toLocaleDateString("ja-JP")}</dd>
           </div>
+          {contract.externalId && (
+            <div>
+              <dt className="text-slate-500">会社ID</dt>
+              <dd>{contract.externalId}</dd>
+            </div>
+          )}
           {contract.notes && (
             <div className="sm:col-span-2">
               <dt className="text-slate-500">備考</dt>
