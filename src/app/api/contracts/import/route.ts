@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { parseDateOnly } from "@/lib/contractLines";
+import {
+  normalizeCompanyName,
+  findCompanyIdConflicts,
+  findLineIdConflicts,
+} from "@/lib/csvImportChecks";
 
 type ImportRow = {
   companyName?: string;
@@ -16,11 +21,6 @@ type ImportRow = {
   externalId?: string;
   notes?: string;
 };
-
-// 全角スペースなどの表記ゆれを吸収して会社名を比較しやすくする
-function normalizeCompanyName(name: string): string {
-  return name.trim().replace(/[\s　]+/g, " ");
-}
 
 // POST /api/contracts/import
 // body: { rows: ImportRow[] }
@@ -45,6 +45,10 @@ export async function POST(req: NextRequest) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return NextResponse.json({ error: "取り込むデータがありません" }, { status: 400 });
   }
+
+  // 会社ID・契約IDの列マッピングが誤っている疑いがあれば、取り込みは行いつつ
+  // 警告として返す（UIの事前チェックをすり抜けてPOSTされた場合の保険）。
+  const warnings = [...findCompanyIdConflicts(rows), ...findLineIdConflicts(rows)];
 
   const createdContractIds = new Set<string>();
   const updatedContractIds = new Set<string>();
@@ -160,5 +164,6 @@ export async function POST(req: NextRequest) {
     linesCreated,
     linesUpdated,
     errors,
+    warnings,
   });
 }

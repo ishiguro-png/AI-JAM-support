@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Papa from "papaparse";
 import { useRouter } from "next/navigation";
+import { findCompanyIdConflicts, findLineIdConflicts } from "@/lib/csvImportChecks";
 
 type FieldKey =
   | "companyName"
@@ -22,8 +23,11 @@ const FIELDS: { key: FieldKey; label: string; required?: boolean; hint?: string 
   { key: "companyName", label: "会社名", required: true },
   {
     key: "companyExternalId",
-    label: "会社ID（torimato側の顧客ID等）",
-    hint: "マッピングを強く推奨。会社名の表記ゆれによる重複登録を防ぐため、会社の同一性判定はこのIDを会社名より優先します",
+    label: "会社ID（顧客ID）",
+    hint:
+      "自動推測はしません。必ずCSVの中身を確認し、同じ会社の全ての行で共通の値になっている列を選んでください。" +
+      "契約ID・行番号など行ごとに異なる値の列を選ぶと、同じ会社が複数の契約先に分裂します。" +
+      "確信が持てない場合は空欄のままにしてください（会社名で判定します）。",
   },
   { key: "quantity", label: "数量（アカウント数）", required: true },
   {
@@ -37,8 +41,10 @@ const FIELDS: { key: FieldKey; label: string; required?: boolean; hint?: string 
   { key: "endDate", label: "契約終了日", hint: "表示用（集計には使用しません）" },
   {
     key: "externalId",
-    label: "契約ID（torimato側の行の一意キー）",
-    hint: "マッピングを推奨。この契約明細行の同一性判定に使います",
+    label: "契約ID（契約明細1行の一意キー）",
+    hint:
+      "自動推測はしません。この契約明細行だけを指す値（行ごとに異なるのが正しい状態）の列を選んでください。" +
+      "会社ID・顧客IDなど複数行で共通になる列を選ばないでください。",
   },
   { key: "contactName", label: "担当者名" },
   { key: "contactEmail", label: "メールアドレス" },
@@ -46,15 +52,17 @@ const FIELDS: { key: FieldKey; label: string; required?: boolean; hint?: string 
   { key: "notes", label: "備考" },
 ];
 
+// 会社ID(companyExternalId)・契約ID(externalId)は、間違った列を選ぶと
+// 会社の分裂や契約明細の誤結合につながるため、自動推測は行わず必ず人が選ぶ。
 const GUESS: Record<FieldKey, string[]> = {
   companyName: ["会社名", "契約先名", "顧客名", "企業名", "会社", "company", "name"],
-  companyExternalId: ["顧客id", "会社id", "取引先id", "顧客番号", "customer id", "client id"],
+  companyExternalId: [],
   quantity: ["数量", "個数", "アカウント数", "口座数", "quantity", "qty"],
   contractStatus: ["契約状態", "契約ステータス", "契約状況", "contract status", "contractstatus"],
   contractType: ["契約種別", "種別", "契約タイプ", "プラン種別", "type"],
   startDate: ["契約開始日", "開始日", "start"],
   endDate: ["契約終了日", "終了日", "end"],
-  externalId: ["契約id", "行id", "契約番号"],
+  externalId: [],
   contactName: ["担当者", "担当者名", "ご担当者", "contact"],
   contactEmail: ["メールアドレス", "メール", "email", "mail"],
   phone: ["電話番号", "電話", "tel", "phone"],
@@ -79,12 +87,14 @@ export default function ImportPage() {
   const [mapping, setMapping] = useState<Partial<Record<FieldKey, string>>>({});
   const [fileName, setFileName] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [ackConflicts, setAckConflicts] = useState(false);
   const [result, setResult] = useState<{
     companiesCreated: number;
     companiesUpdated: number;
     linesCreated: number;
     linesUpdated: number;
     errors: { row: number; message: string }[];
+    warnings?: string[];
   } | null>(null);
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -92,6 +102,7 @@ export default function ImportPage() {
     if (!file) return;
     setFileName(file.name);
     setResult(null);
+    setAckConflicts(false);
     Papa.parse<Record<string, string>>(file, {
       header: true,
       skipEmptyLines: true,
@@ -102,6 +113,11 @@ export default function ImportPage() {
         setMapping(guessMapping(hdrs));
       },
     });
+  }
+
+  function updateMapping(key: FieldKey, value: string) {
+    setAckConflicts(false);
+    setMapping((m) => ({ ...m, [key]: value || undefined }));
   }
 
   const mappedRows = useMemo(() => {
@@ -115,11 +131,20 @@ export default function ImportPage() {
     });
   }, [rows, mapping]);
 
+  // 会社ID・契約IDの列マッピングが間違っている疑いを、取り込み前にCSV全行から検出する。
+  // 例: 契約ID列を会社IDに誤ってマッピングすると、同じ会社名なのに会社IDが行ごとに
+  // バラバラになり、同じ会社が複数のContractに分裂する原因になる。
+  const idConflictWarnings = useMemo(() => {
+    if (!mapping.companyExternalId && !mapping.externalId) return [];
+    return [...findCompanyIdConflicts(mappedRows), ...findLineIdConflicts(mappedRows)];
+  }, [mappedRows, mapping.companyExternalId, mapping.externalId]);
+
   const canSubmit =
     rows.length > 0 &&
     !!mapping.companyName &&
     !!mapping.quantity &&
     !!mapping.contractStatus &&
+    (idConflictWarnings.length === 0 || ackConflicts) &&
     !submitting;
 
   async function handleImport() {
@@ -186,9 +211,7 @@ export default function ImportPage() {
                 <select
                   className="input"
                   value={mapping[field.key] || ""}
-                  onChange={(e) =>
-                    setMapping((m) => ({ ...m, [field.key]: e.target.value || undefined }))
-                  }
+                  onChange={(e) => updateMapping(field.key, e.target.value)}
                 >
                   <option value="">（マッピングしない）</option>
                   {headers.map((h) => (
@@ -232,6 +255,31 @@ export default function ImportPage() {
           </div>
         )}
 
+        {idConflictWarnings.length > 0 && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            <p className="font-semibold">
+              会社ID・契約IDの列マッピングが誤っている可能性があります
+            </p>
+            <ul className="mt-2 list-disc pl-5">
+              {idConflictWarnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+            <p className="mt-2">
+              このまま取り込むと、会社が意図せず分裂したり契約明細が誤って結合される
+              おそれがあります。まずは会社ID・契約IDのマッピングを見直してください。
+            </p>
+            <label className="mt-2 flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={ackConflicts}
+                onChange={(e) => setAckConflicts(e.target.checked)}
+              />
+              内容を確認した上で、このまま取り込みます
+            </label>
+          </div>
+        )}
+
         <button className="btn" disabled={!canSubmit} onClick={handleImport}>
           {submitting ? "取り込み中..." : `${rows.length}件を取り込む`}
         </button>
@@ -243,6 +291,13 @@ export default function ImportPage() {
               契約明細: 新規{result.linesCreated}件 / 更新{result.linesUpdated}件
               {result.errors.length > 0 && ` / エラー: ${result.errors.length}件`}
             </p>
+            {result.warnings && result.warnings.length > 0 && (
+              <ul className="mt-2 list-disc pl-5 text-amber-700">
+                {result.warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            )}
             {result.errors.length > 0 && (
               <ul className="mt-2 list-disc pl-5 text-rose-600">
                 {result.errors.map((err, i) => (
