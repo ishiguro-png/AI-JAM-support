@@ -117,16 +117,18 @@ export default async function ContractDetailPage({
           <thead className="bg-slate-100 text-left text-slate-600">
             <tr>
               <th className="px-4 py-2">契約種別</th>
+              <th className="px-4 py-2">商品名</th>
               <th className="px-4 py-2">数量</th>
               <th className="px-4 py-2">契約状態</th>
               <th className="px-4 py-2">契約開始日</th>
               <th className="px-4 py-2">契約終了日</th>
+              <th className="px-4 py-2">金額</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {contract.contractLines.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
                   契約明細がまだありません。CSVインポートで取り込んでください。
                 </td>
               </tr>
@@ -136,6 +138,7 @@ export default async function ContractDetailPage({
               return (
                 <tr key={line.id}>
                   <td className="px-4 py-2">{line.contractType || "-"}</td>
+                  <td className="px-4 py-2">{line.productName || "-"}</td>
                   <td className="px-4 py-2">{line.quantity}</td>
                   <td className="px-4 py-2">
                     {line.contractStatus ? (
@@ -159,6 +162,7 @@ export default async function ContractDetailPage({
                   <td className="px-4 py-2 text-slate-500">
                     {line.endDate ? new Date(line.endDate).toLocaleDateString("ja-JP") : "-"}
                   </td>
+                  <td className="px-4 py-2 text-slate-500">{line.amount || "-"}</td>
                 </tr>
               );
             })}

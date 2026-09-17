@@ -15,6 +15,8 @@ type ImportRow = {
   contractStatus?: string;
   startDate?: string;
   endDate?: string;
+  productName?: string;
+  amount?: string;
   contactName?: string;
   contactEmail?: string;
   phone?: string;
@@ -66,6 +68,9 @@ export async function POST(req: NextRequest) {
     // 契約開始日・終了日は表示用のみ。パースできなくても行自体は取り込む。
     const startDate = row.startDate ? parseDateOnly(row.startDate) : null;
     const endDate = row.endDate ? parseDateOnly(row.endDate) : null;
+    // 商品名・金額も表示用・検証用のみ（集計には使用しない）
+    const productName = row.productName?.trim() || null;
+    const amount = row.amount?.trim() || null;
 
     if (!companyName) {
       errors.push({ row: i + 1, message: "会社名が空です" });
@@ -140,13 +145,25 @@ export async function POST(req: NextRequest) {
             quantity,
             startDate,
             endDate,
+            productName,
+            amount,
             externalId,
           },
         });
         linesUpdated++;
       } else {
         await prisma.contractLine.create({
-          data: { contractId: contract.id, contractType, contractStatus, quantity, startDate, endDate, externalId },
+          data: {
+            contractId: contract.id,
+            contractType,
+            contractStatus,
+            quantity,
+            startDate,
+            endDate,
+            productName,
+            amount,
+            externalId,
+          },
         });
         linesCreated++;
       }

@@ -43,6 +43,8 @@ model ContractLine {
   quantity       Int
   startDate      DateTime? // 表示用のみ。集計には使用しない
   endDate        DateTime? // 表示用のみ。集計には使用しない
+  productName    String? // 商品名（表示用・検証用。CSVの表記をそのまま保持）
+  amount         String? // 金額（表示用・検証用。書式（カンマ・通貨記号）を保持するため文字列で保存）
   externalId     String?  @unique // torimato側の行の一意キー（あれば再インポート時の重複防止に使う）
   importedAt     DateTime @default(now())
   updatedAt      DateTime @updatedAt

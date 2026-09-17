@@ -7,6 +7,10 @@
 //      （アプリのロジックとは別に、このスクリプト内で独立に再計算してクロスチェックする）
 //   3. contractStatusが未設定(null)の契約明細がないか（集計から漏れていないか確認するため）
 //   4. 契約ID（externalId）がContractLine間で重複していないか
+//   5. 契約種別（contractType）の集計・商品名との整合性
+//      - 年契約/月契約/未設定それぞれの件数
+//      - 商品名が「【年間プラン】」なのにcontractTypeが「月契約」になっている件数
+//      - 商品名が「【月額プラン】」なのにcontractTypeが「年契約」になっている件数
 //
 // 同一CSVの再インポートで件数が増殖しないかは、このスクリプトの実行結果
 // （会社数・契約明細数の合計）を再インポート前後で比較することで確認できる。
@@ -119,6 +123,73 @@ async function main() {
     hasProblem = true;
     console.log(`[NG] 重複している契約ID: ${dupIds.map((d) => d.externalId).join(", ")}`);
   }
+  console.log("");
+
+  // 5. 契約種別（contractType）の集計・商品名との整合性チェック
+  const YEARLY_TAG = "【年間プラン】";
+  const MONTHLY_TAG = "【月額プラン】";
+  let yearlyCount = 0;
+  let monthlyCount = 0;
+  let unsetTypeCount = 0;
+  const typeMismatches: {
+    companyName: string;
+    productName: string;
+    contractType: string;
+    amount: string;
+    kind: string;
+  }[] = [];
+
+  for (const c of contracts) {
+    for (const l of c.contractLines) {
+      const type = (l.contractType || "").trim();
+      if (type === "年契約") yearlyCount++;
+      else if (type === "月契約") monthlyCount++;
+      else if (!type) unsetTypeCount++;
+
+      const productName = l.productName || "";
+      if (productName.includes(YEARLY_TAG) && type === "月契約") {
+        typeMismatches.push({
+          companyName: c.companyName,
+          productName,
+          contractType: type,
+          amount: l.amount ?? "(なし)",
+          kind: `商品名が${YEARLY_TAG}なのに月契約`,
+        });
+      }
+      if (productName.includes(MONTHLY_TAG) && type === "年契約") {
+        typeMismatches.push({
+          companyName: c.companyName,
+          productName,
+          contractType: type,
+          amount: l.amount ?? "(なし)",
+          kind: `商品名が${MONTHLY_TAG}なのに年契約`,
+        });
+      }
+    }
+  }
+
+  const yearlyMismatchCount = typeMismatches.filter((m) => m.kind.includes(YEARLY_TAG)).length;
+  const monthlyMismatchCount = typeMismatches.filter((m) => m.kind.includes(MONTHLY_TAG)).length;
+
+  console.log("=== 契約種別の検証 ===");
+  console.log(`年契約の件数: ${yearlyCount}`);
+  console.log(`月契約の件数: ${monthlyCount}`);
+  console.log(`契約種別未設定の件数: ${unsetTypeCount}`);
+  console.log(`${YEARLY_TAG}なのに月契約になっている件数: ${yearlyMismatchCount}`);
+  console.log(`${MONTHLY_TAG}なのに年契約になっている件数: ${monthlyMismatchCount}`);
+
+  if (typeMismatches.length > 0) {
+    hasProblem = true;
+    console.log("");
+    console.log("不一致の明細一覧（会社名 / 商品名 / 契約種別 / 金額）:");
+    for (const m of typeMismatches) {
+      console.log(
+        `  - [${m.kind}] ${m.companyName} / ${m.productName} / ${m.contractType} / ${m.amount}`
+      );
+    }
+  }
+  console.log("");
+  console.log(typeMismatches.length === 0 ? "[OK] 契約種別" : "[NG] 契約種別");
   console.log("");
 
   console.log("=== 会社別サマリ ===");

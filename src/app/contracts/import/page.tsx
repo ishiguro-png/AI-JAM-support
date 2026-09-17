@@ -13,6 +13,8 @@ type FieldKey =
   | "contractStatus"
   | "startDate"
   | "endDate"
+  | "productName"
+  | "amount"
   | "externalId"
   | "contactName"
   | "contactEmail"
@@ -40,6 +42,12 @@ const FIELDS: { key: FieldKey; label: string; required?: boolean; hint?: string 
   { key: "startDate", label: "契約開始日", hint: "表示用（集計には使用しません）" },
   { key: "endDate", label: "契約終了日", hint: "表示用（集計には使用しません）" },
   {
+    key: "productName",
+    label: "商品名",
+    hint: "表示用・整合性チェック用（例:「【年間プラン】」「【月額プラン】」等の表記と契約種別の不一致検出に使用）",
+  },
+  { key: "amount", label: "金額", hint: "表示用のみ（集計には使用しません）" },
+  {
     key: "externalId",
     label: "契約ID（契約明細1行の一意キー）",
     hint:
@@ -62,6 +70,8 @@ const GUESS: Record<FieldKey, string[]> = {
   contractType: ["契約種別", "種別", "契約タイプ", "プラン種別", "type"],
   startDate: ["契約開始日", "開始日", "start"],
   endDate: ["契約終了日", "終了日", "end"],
+  productName: ["商品名", "プラン名", "product"],
+  amount: ["金額", "料金", "価格", "amount", "price"],
   externalId: [],
   contactName: ["担当者", "担当者名", "ご担当者", "contact"],
   contactEmail: ["メールアドレス", "メール", "email", "mail"],
