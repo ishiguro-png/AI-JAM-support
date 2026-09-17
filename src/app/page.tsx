@@ -6,12 +6,11 @@ import { PlanBadge } from "@/components/PlanBadge";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const [total, tierCounts, recentLogs] = await Promise.all([
+  const [allTotal, activeTotal, tierCounts, recentLogs] = await Promise.all([
+    prisma.contract.count(),
     prisma.contract.count({ where: { status: "active" } }),
     Promise.all(
-      PLAN_TIERS.map((tier) =>
-        prisma.contract.count({ where: { planTier: tier, status: "active" } })
-      )
+      PLAN_TIERS.map((tier) => prisma.contract.count({ where: { planTier: tier } }))
     ),
     prisma.supportLog.findMany({
       orderBy: { occurredAt: "desc" },
@@ -31,8 +30,9 @@ export default async function DashboardPage() {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
         <div className="card p-4">
-          <div className="text-sm text-slate-500">対象契約先（稼働中）</div>
-          <div className="mt-1 text-3xl font-bold">{total}</div>
+          <div className="text-sm text-slate-500">契約先（全ステータス）</div>
+          <div className="mt-1 text-3xl font-bold">{allTotal}</div>
+          <div className="mt-1 text-xs text-slate-400">うち稼働中: {activeTotal}</div>
         </div>
         {PLAN_TIERS.map((tier, i) => (
           <Link

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
-import { PLAN_TIERS } from "@/lib/planTier";
+import { PLAN_TIERS, PLAN_TIER_SHORT_LABELS } from "@/lib/planTier";
 import { PlanBadge } from "@/components/PlanBadge";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +12,10 @@ export default async function ContractsPage({
 }) {
   const tier = searchParams.tier || "";
   const q = searchParams.q || "";
-  const status = searchParams.status ?? "active";
+  // クエリパラメータが無い初回表示では絞り込まず全ステータスを表示する。
+  // ここで "active" 等を既定値にすると、インポートしたデータのステータス値が
+  // その文字列と一致しない限り一覧が常に空に見えてしまうため要注意。
+  const status = searchParams.status || "";
 
   const contracts = await prisma.contract.findMany({
     where: {
@@ -50,7 +53,7 @@ export default async function ContractsPage({
             <option value="">すべて</option>
             {PLAN_TIERS.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {PLAN_TIER_SHORT_LABELS[t]}
               </option>
             ))}
           </select>
