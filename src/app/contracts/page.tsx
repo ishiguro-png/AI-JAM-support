@@ -38,7 +38,7 @@ export default async function ContractsPage({
     },
   });
 
-  // アカウント数・プランは日付によって変わるため保存せずここで都度計算する
+  // アカウント数・プランは契約状態が変わるたびに変わりうるため保存せずここで都度計算する
   const withComputed = contracts.map(({ contractLines, ...c }) => {
     const accountCount = computeActiveAccountCount(contractLines);
     return { ...c, accountCount, planTier: computePlanTier(accountCount) };

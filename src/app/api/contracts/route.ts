@@ -46,12 +46,14 @@ export async function GET(req: NextRequest) {
 }
 
 // POST /api/contracts - 契約を1件手動登録（契約明細を1件作成する）
+// アカウント数の集計に使うのはcontractStatusのみ。startDate/endDateは表示用のため任意。
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const {
     companyName,
     quantity,
     contractType,
+    contractStatus,
     startDate,
     endDate,
     contactName,
@@ -60,21 +62,15 @@ export async function POST(req: NextRequest) {
     notes,
   } = body;
 
-  if (!companyName || typeof quantity !== "number" || !startDate || !endDate) {
+  if (!companyName || typeof quantity !== "number" || !contractStatus) {
     return NextResponse.json(
-      { error: "companyName, quantity(数値), startDate, endDate は必須です" },
+      { error: "companyName, quantity(数値), contractStatus は必須です" },
       { status: 400 }
     );
   }
 
-  const parsedStart = parseDateOnly(String(startDate));
-  const parsedEnd = parseDateOnly(String(endDate));
-  if (!parsedStart || !parsedEnd) {
-    return NextResponse.json(
-      { error: "startDate / endDate の形式が不正です（例: 2026-09-01）" },
-      { status: 400 }
-    );
-  }
+  const parsedStart = startDate ? parseDateOnly(String(startDate)) : null;
+  const parsedEnd = endDate ? parseDateOnly(String(endDate)) : null;
 
   const contract = await prisma.contract.create({
     data: {
@@ -87,6 +83,7 @@ export async function POST(req: NextRequest) {
         create: {
           quantity,
           contractType: contractType || "",
+          contractStatus,
           startDate: parsedStart,
           endDate: parsedEnd,
         },

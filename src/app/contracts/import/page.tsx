@@ -8,40 +8,49 @@ type FieldKey =
   | "companyName"
   | "quantity"
   | "contractType"
+  | "contractStatus"
   | "startDate"
   | "endDate"
+  | "externalId"
   | "contactName"
   | "contactEmail"
   | "phone"
   | "status"
-  | "externalId"
   | "notes";
 
-const FIELDS: { key: FieldKey; label: string; required?: boolean }[] = [
+const FIELDS: { key: FieldKey; label: string; required?: boolean; hint?: string }[] = [
   { key: "companyName", label: "会社名", required: true },
   { key: "quantity", label: "数量（アカウント数）", required: true },
-  { key: "contractType", label: "契約種別（月契約/年契約）", required: true },
-  { key: "startDate", label: "契約開始日", required: true },
-  { key: "endDate", label: "契約終了日", required: true },
+  {
+    key: "contractStatus",
+    label: "契約状態（契約中/契約前/解約）",
+    required: true,
+    hint: "アカウント数の集計・サポートプラン判定はこの列だけで行います",
+  },
+  { key: "contractType", label: "契約種別（月契約/年契約）", hint: "表示用" },
+  { key: "startDate", label: "契約開始日", hint: "表示用（集計には使用しません）" },
+  { key: "endDate", label: "契約終了日", hint: "表示用（集計には使用しません）" },
+  { key: "externalId", label: "契約ID（torimato側の一意キー）" },
   { key: "contactName", label: "担当者名" },
   { key: "contactEmail", label: "メールアドレス" },
   { key: "phone", label: "電話番号" },
-  { key: "status", label: "ステータス" },
-  { key: "externalId", label: "契約行ID（torimato側の一意キー）" },
+  { key: "status", label: "契約先ステータス（このシステム内の稼働中/一時停止/解約）" },
   { key: "notes", label: "備考" },
 ];
 
 const GUESS: Record<FieldKey, string[]> = {
   companyName: ["会社名", "契約先名", "顧客名", "企業名", "会社", "company", "name"],
   quantity: ["数量", "個数", "アカウント数", "口座数", "quantity", "qty"],
+  contractStatus: ["契約状態", "契約ステータス", "契約状況", "contract status", "contractstatus"],
   contractType: ["契約種別", "種別", "契約タイプ", "プラン種別", "type"],
   startDate: ["契約開始日", "開始日", "start"],
   endDate: ["契約終了日", "終了日", "end"],
+  externalId: ["契約ID", "行ID", "id", "契約番号"],
   contactName: ["担当者", "担当者名", "ご担当者", "contact"],
   contactEmail: ["メールアドレス", "メール", "email", "mail"],
   phone: ["電話番号", "電話", "tel", "phone"],
-  status: ["ステータス", "状態", "status"],
-  externalId: ["契約ID", "行ID", "id", "契約番号"],
+  // 「契約状態」列（contractStatus）と紛らわしいため、日本語の汎用的な語には反応させない
+  status: ["契約先ステータス", "status"],
   notes: ["備考", "メモ", "note", "notes"],
 };
 
@@ -103,8 +112,7 @@ export default function ImportPage() {
     rows.length > 0 &&
     !!mapping.companyName &&
     !!mapping.quantity &&
-    !!mapping.startDate &&
-    !!mapping.endDate &&
+    !!mapping.contractStatus &&
     !submitting;
 
   async function handleImport() {
@@ -135,8 +143,10 @@ export default function ImportPage() {
         同一会社について「月契約」「年契約」など複数行に分かれている場合、
         1行 = 1つの契約明細としてそれぞれ取り込まれ、会社名で自動的にまとめられます。
         アカウント数は単純な数量の合計ではなく、
-        <strong>契約開始日〜契約終了日の期間内に現在日が含まれる行だけ</strong>
-        の数量を合算して算出します（未来開始の契約や終了済みの契約はカウントされません）。
+        <strong>「契約状態」列が「契約中」になっている行だけ</strong>
+        の数量を合算して算出します（「契約前」「解約」の行はカウントされません）。
+        契約開始日・契約終了日は無料期間や契約切り替えの都合で実際の契約状態と
+        ずれることがあるため、集計には使わず契約詳細画面の表示用データとしてのみ保持します。
         会社名が既存契約と一致する場合は契約先情報が上書き更新されます。
       </p>
 
@@ -159,6 +169,7 @@ export default function ImportPage() {
                   {field.label}
                   {field.required && <span className="text-rose-600"> *</span>}
                 </label>
+                {field.hint && <p className="mb-1 text-xs text-slate-400">{field.hint}</p>}
                 <select
                   className="input"
                   value={mapping[field.key] || ""}

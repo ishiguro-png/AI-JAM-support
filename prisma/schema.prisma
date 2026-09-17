@@ -27,21 +27,24 @@ model Contract {
 }
 
 // 契約明細（torimatoの1行 = 月契約 or 年契約などの単位）
-// 会社単位のアカウント数は「現在日が開始日以上・終了日以下」の行のquantityを合算して算出する
+// 会社単位のアカウント数は「contractStatus = 契約中」の行のquantityを合算して算出する。
+// 契約開始日・終了日は無料期間や契約切り替えの都合で実態と一致しないことがあるため、
+// 表示用データとしてのみ保持し、集計判定には一切使用しない。
 model ContractLine {
-  id           String   @id @default(cuid())
-  contractId   String
-  contract     Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  contractType String // 例: "月契約" | "年契約"（torimatoのCSV表記をそのまま保持）
-  quantity     Int
-  startDate    DateTime // 日付のみを保持（時刻は00:00 UTCに正規化）
-  endDate      DateTime // 同上
-  externalId   String?  @unique // torimato側の行の一意キー（あれば再インポート時の重複防止に使う）
-  importedAt   DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String   @id @default(cuid())
+  contractId     String
+  contract       Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  contractType   String // 例: "月契約" | "年契約"（torimatoのCSV表記をそのまま保持、表示用）
+  contractStatus String? // 例: "契約中" | "契約前" | "解約"（アカウント数集計の判定に使用）
+  quantity       Int
+  startDate      DateTime? // 表示用のみ。集計には使用しない
+  endDate        DateTime? // 表示用のみ。集計には使用しない
+  externalId     String?  @unique // torimato側の行の一意キー（あれば再インポート時の重複防止に使う）
+  importedAt     DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@index([contractId])
-  @@index([startDate, endDate])
+  @@index([contractStatus])
 }
 
 // 対応履歴（メール送信ログ含む、誰が・いつ・何を対応したか）

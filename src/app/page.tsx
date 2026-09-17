@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { PLAN_TIERS, PLAN_TIER_LABELS, computePlanTier } from "@/lib/planTier";
-import { computeActiveAccountCount, todayUTC } from "@/lib/contractLines";
+import { computeActiveAccountCount } from "@/lib/contractLines";
 import { PlanBadge } from "@/components/PlanBadge";
 
 export const dynamic = "force-dynamic";
@@ -18,12 +18,11 @@ export default async function DashboardPage() {
     }),
   ]);
 
-  // アカウント数・プランはContractLineから都度集計する（キャッシュを持たないため常に最新）
-  const now = todayUTC();
+  // アカウント数・プランはContractLineの契約状態から都度集計する（キャッシュを持たないため常に最新）
   const tierCounts = PLAN_TIERS.map(
     (tier) =>
       contractsWithLines.filter(
-        (c) => computePlanTier(computeActiveAccountCount(c.contractLines, now)) === tier
+        (c) => computePlanTier(computeActiveAccountCount(c.contractLines)) === tier
       ).length
   );
 

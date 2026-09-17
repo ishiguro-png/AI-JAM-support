@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { computePlanTier } from "@/lib/planTier";
-import { computeActiveAccountCount, isLineActive, todayUTC } from "@/lib/contractLines";
+import { ACTIVE_CONTRACT_STATUS, computeActiveAccountCount } from "@/lib/contractLines";
 import { PlanBadge } from "@/components/PlanBadge";
 import { AddLogForm } from "@/components/AddLogForm";
 import { SendEmailForm } from "@/components/SendEmailForm";
@@ -33,8 +33,7 @@ export default async function ContractDetailPage({
 
   if (!contract) notFound();
 
-  const now = todayUTC();
-  const accountCount = computeActiveAccountCount(contract.contractLines, now);
+  const accountCount = computeActiveAccountCount(contract.contractLines);
   const planTier = computePlanTier(accountCount);
 
   const [staff, templates] = await Promise.all([
@@ -105,14 +104,17 @@ export default async function ContractDetailPage({
         <div className="border-b border-slate-200 px-4 py-3 font-semibold">
           契約明細（{contract.contractLines.length}件）
         </div>
+        <p className="px-4 pt-3 text-xs text-slate-500">
+          アカウント数の集計は「契約状態」列のみで判定します（契約開始日・終了日は表示用の参考情報です）。
+        </p>
         <table className="w-full text-sm">
           <thead className="bg-slate-100 text-left text-slate-600">
             <tr>
               <th className="px-4 py-2">契約種別</th>
               <th className="px-4 py-2">数量</th>
+              <th className="px-4 py-2">契約状態</th>
               <th className="px-4 py-2">契約開始日</th>
               <th className="px-4 py-2">契約終了日</th>
-              <th className="px-4 py-2">状態</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -124,26 +126,32 @@ export default async function ContractDetailPage({
               </tr>
             )}
             {contract.contractLines.map((line) => {
-              const active = isLineActive(line, now);
-              const future = now.getTime() < line.startDate.getTime();
+              const active = line.contractStatus === ACTIVE_CONTRACT_STATUS;
               return (
                 <tr key={line.id}>
                   <td className="px-4 py-2">{line.contractType || "-"}</td>
                   <td className="px-4 py-2">{line.quantity}</td>
                   <td className="px-4 py-2">
-                    {new Date(line.startDate).toLocaleDateString("ja-JP")}
-                  </td>
-                  <td className="px-4 py-2">
-                    {new Date(line.endDate).toLocaleDateString("ja-JP")}
-                  </td>
-                  <td className="px-4 py-2">
-                    {active ? (
-                      <span className="badge bg-emerald-100 text-emerald-800">有効</span>
-                    ) : future ? (
-                      <span className="badge bg-slate-100 text-slate-600">開始前</span>
+                    {line.contractStatus ? (
+                      <span
+                        className={
+                          active
+                            ? "badge bg-emerald-100 text-emerald-800"
+                            : "badge bg-slate-100 text-slate-600"
+                        }
+                      >
+                        {line.contractStatus}
+                        {active ? "（集計対象）" : ""}
+                      </span>
                     ) : (
-                      <span className="badge bg-slate-100 text-slate-500">終了済み</span>
+                      <span className="badge bg-slate-100 text-slate-400">未設定</span>
                     )}
+                  </td>
+                  <td className="px-4 py-2 text-slate-500">
+                    {line.startDate ? new Date(line.startDate).toLocaleDateString("ja-JP") : "-"}
+                  </td>
+                  <td className="px-4 py-2 text-slate-500">
+                    {line.endDate ? new Date(line.endDate).toLocaleDateString("ja-JP") : "-"}
                   </td>
                 </tr>
               );

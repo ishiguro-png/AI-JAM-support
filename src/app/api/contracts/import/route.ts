@@ -6,6 +6,7 @@ type ImportRow = {
   companyName?: string;
   quantity?: string | number;
   contractType?: string;
+  contractStatus?: string;
   startDate?: string;
   endDate?: string;
   contactName?: string;
@@ -21,8 +22,10 @@ type ImportRow = {
 //
 // torimatoのCSVは同一会社について「月契約」「年契約」等が別々の行として存在するため、
 // 1行 = 1契約明細（ContractLine）として取り込み、会社（Contract）単位でまとめる。
-// アカウント数はここでは保存せず、読み出し時にContractLineから都度集計する
-// （契約開始日・終了日を跨いで「現在有効かどうか」が日々変わるため）。
+//
+// アカウント数の集計は「契約状態（contractStatus）」列だけを基準に行う。
+// 契約開始日・終了日は無料期間や契約切り替えの都合で実際の契約状態と一致しないことが
+// あるため判定には使わず、契約詳細画面などの表示用データとしてのみ保持する。
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const rows: ImportRow[] = body.rows || [];
@@ -42,6 +45,8 @@ export async function POST(req: NextRequest) {
     const companyName = (row.companyName || "").trim();
     const quantity = Number(row.quantity);
     const contractType = (row.contractType || "").trim();
+    const contractStatus = (row.contractStatus || "").trim();
+    // 契約開始日・終了日は表示用のみ。パースできなくても行自体は取り込む。
     const startDate = row.startDate ? parseDateOnly(row.startDate) : null;
     const endDate = row.endDate ? parseDateOnly(row.endDate) : null;
 
@@ -53,16 +58,11 @@ export async function POST(req: NextRequest) {
       errors.push({ row: i + 1, message: "数量が不正です" });
       continue;
     }
-    if (!startDate) {
-      errors.push({ row: i + 1, message: "契約開始日が不正です（例: 2026/9/1）" });
-      continue;
-    }
-    if (!endDate) {
-      errors.push({ row: i + 1, message: "契約終了日が不正です（例: 2026/9/30）" });
-      continue;
-    }
-    if (startDate.getTime() > endDate.getTime()) {
-      errors.push({ row: i + 1, message: "契約開始日が契約終了日より後になっています" });
+    if (!contractStatus) {
+      errors.push({
+        row: i + 1,
+        message: "契約状態が空です（契約中 / 契約前 / 解約 のいずれかを指定してください）",
+      });
       continue;
     }
 
@@ -92,6 +92,9 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // externalId（契約ID）が無い場合は契約種別・期間の組で同一明細とみなす。
+      // contractStatusは再インポートのたびに変わりうる値なので、この照合キーには含めない
+      // （そうしないと"契約前→契約中"のような状態遷移が別明細として重複作成されてしまう）。
       const externalId = row.externalId?.trim() || null;
       const existingLine = externalId
         ? await prisma.contractLine.findUnique({ where: { externalId } })
@@ -102,12 +105,20 @@ export async function POST(req: NextRequest) {
       if (existingLine) {
         await prisma.contractLine.update({
           where: { id: existingLine.id },
-          data: { contractId: contract.id, contractType, quantity, startDate, endDate, externalId },
+          data: {
+            contractId: contract.id,
+            contractType,
+            contractStatus,
+            quantity,
+            startDate,
+            endDate,
+            externalId,
+          },
         });
         linesUpdated++;
       } else {
         await prisma.contractLine.create({
-          data: { contractId: contract.id, contractType, quantity, startDate, endDate, externalId },
+          data: { contractId: contract.id, contractType, contractStatus, quantity, startDate, endDate, externalId },
         });
         linesCreated++;
       }
