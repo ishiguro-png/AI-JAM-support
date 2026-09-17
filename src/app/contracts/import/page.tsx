@@ -6,7 +6,10 @@ import { useRouter } from "next/navigation";
 
 type FieldKey =
   | "companyName"
-  | "accountCount"
+  | "quantity"
+  | "contractType"
+  | "startDate"
+  | "endDate"
   | "contactName"
   | "contactEmail"
   | "phone"
@@ -16,23 +19,29 @@ type FieldKey =
 
 const FIELDS: { key: FieldKey; label: string; required?: boolean }[] = [
   { key: "companyName", label: "会社名", required: true },
-  { key: "accountCount", label: "アカウント数", required: true },
+  { key: "quantity", label: "数量（アカウント数）", required: true },
+  { key: "contractType", label: "契約種別（月契約/年契約）", required: true },
+  { key: "startDate", label: "契約開始日", required: true },
+  { key: "endDate", label: "契約終了日", required: true },
   { key: "contactName", label: "担当者名" },
   { key: "contactEmail", label: "メールアドレス" },
   { key: "phone", label: "電話番号" },
   { key: "status", label: "ステータス" },
-  { key: "externalId", label: "契約ID（torimato側の一意キー）" },
+  { key: "externalId", label: "契約行ID（torimato側の一意キー）" },
   { key: "notes", label: "備考" },
 ];
 
 const GUESS: Record<FieldKey, string[]> = {
   companyName: ["会社名", "契約先名", "顧客名", "企業名", "会社", "company", "name"],
-  accountCount: ["アカウント数", "アカウント", "ユーザー数", "ID数", "account", "accounts", "seats"],
+  quantity: ["数量", "個数", "アカウント数", "口座数", "quantity", "qty"],
+  contractType: ["契約種別", "種別", "契約タイプ", "プラン種別", "type"],
+  startDate: ["契約開始日", "開始日", "start"],
+  endDate: ["契約終了日", "終了日", "end"],
   contactName: ["担当者", "担当者名", "ご担当者", "contact"],
   contactEmail: ["メールアドレス", "メール", "email", "mail"],
   phone: ["電話番号", "電話", "tel", "phone"],
   status: ["ステータス", "状態", "status"],
-  externalId: ["契約ID", "id", "契約番号"],
+  externalId: ["契約ID", "行ID", "id", "契約番号"],
   notes: ["備考", "メモ", "note", "notes"],
 };
 
@@ -55,8 +64,10 @@ export default function ImportPage() {
   const [fileName, setFileName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<{
-    created: number;
-    updated: number;
+    companiesCreated: number;
+    companiesUpdated: number;
+    linesCreated: number;
+    linesUpdated: number;
     errors: { row: number; message: string }[];
   } | null>(null);
 
@@ -89,7 +100,12 @@ export default function ImportPage() {
   }, [rows, mapping]);
 
   const canSubmit =
-    rows.length > 0 && !!mapping.companyName && !!mapping.accountCount && !submitting;
+    rows.length > 0 &&
+    !!mapping.companyName &&
+    !!mapping.quantity &&
+    !!mapping.startDate &&
+    !!mapping.endDate &&
+    !submitting;
 
   async function handleImport() {
     setSubmitting(true);
@@ -113,7 +129,15 @@ export default function ImportPage() {
       <h1 className="text-2xl font-bold">CSVインポート</h1>
       <p className="text-sm text-slate-500">
         torimato（admin.torimato.jp）からエクスポートしたCSVをアップロードし、
-        列をこのシステムの項目に割り当てて取り込みます。会社名が既存契約と一致する場合は上書き更新されます。
+        列をこのシステムの項目に割り当てて取り込みます。
+      </p>
+      <p className="text-sm text-slate-500">
+        同一会社について「月契約」「年契約」など複数行に分かれている場合、
+        1行 = 1つの契約明細としてそれぞれ取り込まれ、会社名で自動的にまとめられます。
+        アカウント数は単純な数量の合計ではなく、
+        <strong>契約開始日〜契約終了日の期間内に現在日が含まれる行だけ</strong>
+        の数量を合算して算出します（未来開始の契約や終了済みの契約はカウントされません）。
+        会社名が既存契約と一致する場合は契約先情報が上書き更新されます。
       </p>
 
       <div className="card space-y-4 p-4">
@@ -191,7 +215,8 @@ export default function ImportPage() {
         {result && (
           <div className="rounded-md bg-slate-50 p-3 text-sm">
             <p>
-              新規登録: {result.created}件 / 更新: {result.updated}件
+              会社: 新規{result.companiesCreated}件 / 更新{result.companiesUpdated}件
+              契約明細: 新規{result.linesCreated}件 / 更新{result.linesUpdated}件
               {result.errors.length > 0 && ` / エラー: ${result.errors.length}件`}
             </p>
             {result.errors.length > 0 && (

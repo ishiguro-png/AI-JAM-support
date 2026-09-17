@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { computePlanTier } from "@/lib/planTier";
+import { computeActiveAccountCount, isLineActive, todayUTC } from "@/lib/contractLines";
 import { PlanBadge } from "@/components/PlanBadge";
 import { AddLogForm } from "@/components/AddLogForm";
 import { SendEmailForm } from "@/components/SendEmailForm";
@@ -23,10 +25,17 @@ export default async function ContractDetailPage({
 }) {
   const contract = await prisma.contract.findUnique({
     where: { id: params.id },
-    include: { supportLogs: { orderBy: { occurredAt: "desc" } } },
+    include: {
+      contractLines: { orderBy: { startDate: "desc" } },
+      supportLogs: { orderBy: { occurredAt: "desc" } },
+    },
   });
 
   if (!contract) notFound();
+
+  const now = todayUTC();
+  const accountCount = computeActiveAccountCount(contract.contractLines, now);
+  const planTier = computePlanTier(accountCount);
 
   const [staff, templates] = await Promise.all([
     prisma.staff.findMany({ orderBy: { name: "asc" } }),
@@ -46,9 +55,9 @@ export default async function ContractDetailPage({
           <div>
             <h1 className="text-2xl font-bold">{contract.companyName}</h1>
             <div className="mt-2 flex items-center gap-2">
-              <PlanBadge tier={contract.planTier} />
+              <PlanBadge tier={planTier} />
               <span className="text-sm text-slate-500">
-                アカウント数: {contract.accountCount}
+                現在のアカウント数: {accountCount}
               </span>
             </div>
           </div>
@@ -85,11 +94,62 @@ export default async function ContractDetailPage({
         <SendEmailForm
           contractId={contract.id}
           contactEmail={contract.contactEmail}
-          planTier={contract.planTier}
+          planTier={planTier}
           staff={staff}
           templates={templates}
         />
         <AddLogForm contractId={contract.id} staff={staff} />
+      </div>
+
+      <div className="card">
+        <div className="border-b border-slate-200 px-4 py-3 font-semibold">
+          契約明細（{contract.contractLines.length}件）
+        </div>
+        <table className="w-full text-sm">
+          <thead className="bg-slate-100 text-left text-slate-600">
+            <tr>
+              <th className="px-4 py-2">契約種別</th>
+              <th className="px-4 py-2">数量</th>
+              <th className="px-4 py-2">契約開始日</th>
+              <th className="px-4 py-2">契約終了日</th>
+              <th className="px-4 py-2">状態</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {contract.contractLines.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-4 py-6 text-center text-slate-500">
+                  契約明細がまだありません。CSVインポートで取り込んでください。
+                </td>
+              </tr>
+            )}
+            {contract.contractLines.map((line) => {
+              const active = isLineActive(line, now);
+              const future = now.getTime() < line.startDate.getTime();
+              return (
+                <tr key={line.id}>
+                  <td className="px-4 py-2">{line.contractType || "-"}</td>
+                  <td className="px-4 py-2">{line.quantity}</td>
+                  <td className="px-4 py-2">
+                    {new Date(line.startDate).toLocaleDateString("ja-JP")}
+                  </td>
+                  <td className="px-4 py-2">
+                    {new Date(line.endDate).toLocaleDateString("ja-JP")}
+                  </td>
+                  <td className="px-4 py-2">
+                    {active ? (
+                      <span className="badge bg-emerald-100 text-emerald-800">有効</span>
+                    ) : future ? (
+                      <span className="badge bg-slate-100 text-slate-600">開始前</span>
+                    ) : (
+                      <span className="badge bg-slate-100 text-slate-500">終了済み</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
 
       <div className="card">

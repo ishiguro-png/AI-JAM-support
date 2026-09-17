@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
-import { PLAN_TIERS, PLAN_TIER_SHORT_LABELS } from "@/lib/planTier";
+import { PLAN_TIERS, PLAN_TIER_SHORT_LABELS, computePlanTier } from "@/lib/planTier";
+import { computeActiveAccountCount } from "@/lib/contractLines";
 import { PlanBadge } from "@/components/PlanBadge";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +20,6 @@ export default async function ContractsPage({
 
   const contracts = await prisma.contract.findMany({
     where: {
-      ...(tier ? { planTier: tier } : {}),
       ...(status ? { status } : {}),
       ...(q
         ? {
@@ -33,9 +33,19 @@ export default async function ContractsPage({
     },
     orderBy: { companyName: "asc" },
     include: {
+      contractLines: true,
       supportLogs: { orderBy: { occurredAt: "desc" }, take: 1 },
     },
   });
+
+  // アカウント数・プランは日付によって変わるため保存せずここで都度計算する
+  const withComputed = contracts.map(({ contractLines, ...c }) => {
+    const accountCount = computeActiveAccountCount(contractLines);
+    return { ...c, accountCount, planTier: computePlanTier(accountCount) };
+  });
+  const visibleContracts = tier
+    ? withComputed.filter((c) => c.planTier === tier)
+    : withComputed;
 
   return (
     <div className="space-y-6">
@@ -89,14 +99,14 @@ export default async function ContractsPage({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {contracts.length === 0 && (
+            {visibleContracts.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
                   該当する契約先がありません。
                 </td>
               </tr>
             )}
-            {contracts.map((c) => (
+            {visibleContracts.map((c) => (
               <tr key={c.id} className="hover:bg-slate-50">
                 <td className="px-4 py-2">
                   <Link href={`/contracts/${c.id}`} className="font-medium text-brand-700 hover:underline">

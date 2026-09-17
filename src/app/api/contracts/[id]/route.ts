@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { computePlanTier } from "@/lib/planTier";
+import { computeActiveAccountCount } from "@/lib/contractLines";
 
 export async function GET(
   _req: NextRequest,
@@ -9,6 +10,7 @@ export async function GET(
   const contract = await prisma.contract.findUnique({
     where: { id: params.id },
     include: {
+      contractLines: { orderBy: { startDate: "desc" } },
       supportLogs: { orderBy: { occurredAt: "desc" } },
     },
   });
@@ -17,7 +19,10 @@ export async function GET(
     return NextResponse.json({ error: "契約が見つかりません" }, { status: 404 });
   }
 
-  return NextResponse.json({ contract });
+  const accountCount = computeActiveAccountCount(contract.contractLines);
+  return NextResponse.json({
+    contract: { ...contract, accountCount, planTier: computePlanTier(accountCount) },
+  });
 }
 
 export async function PATCH(
@@ -36,11 +41,6 @@ export async function PATCH(
     "status",
   ]) {
     if (key in body) data[key] = body[key] || null;
-  }
-
-  if (typeof body.accountCount === "number") {
-    data.accountCount = body.accountCount;
-    data.planTier = computePlanTier(body.accountCount);
   }
 
   const contract = await prisma.contract.update({

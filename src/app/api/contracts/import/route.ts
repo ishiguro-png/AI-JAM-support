@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { computePlanTier } from "@/lib/planTier";
+import { parseDateOnly } from "@/lib/contractLines";
 
 type ImportRow = {
   companyName?: string;
-  accountCount?: string | number;
+  quantity?: string | number;
+  contractType?: string;
+  startDate?: string;
+  endDate?: string;
   contactName?: string;
   contactEmail?: string;
   phone?: string;
@@ -14,8 +17,12 @@ type ImportRow = {
 };
 
 // POST /api/contracts/import
-// body: { rows: ImportRow[] }  ※CSVの列マッピングはクライアント側で済ませ、
-// フィールド名を統一した状態のrowsを受け取る。
+// body: { rows: ImportRow[] }
+//
+// torimatoのCSVは同一会社について「月契約」「年契約」等が別々の行として存在するため、
+// 1行 = 1契約明細（ContractLine）として取り込み、会社（Contract）単位でまとめる。
+// アカウント数はここでは保存せず、読み出し時にContractLineから都度集計する
+// （契約開始日・終了日を跨いで「現在有効かどうか」が日々変わるため）。
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const rows: ImportRow[] = body.rows || [];
@@ -24,48 +31,85 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "取り込むデータがありません" }, { status: 400 });
   }
 
-  let created = 0;
-  let updated = 0;
+  const createdContractIds = new Set<string>();
+  const updatedContractIds = new Set<string>();
+  let linesCreated = 0;
+  let linesUpdated = 0;
   const errors: { row: number; message: string }[] = [];
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const companyName = (row.companyName || "").trim();
-    const accountCount = Number(row.accountCount);
+    const quantity = Number(row.quantity);
+    const contractType = (row.contractType || "").trim();
+    const startDate = row.startDate ? parseDateOnly(row.startDate) : null;
+    const endDate = row.endDate ? parseDateOnly(row.endDate) : null;
 
-    if (!companyName || Number.isNaN(accountCount)) {
-      errors.push({
-        row: i + 1,
-        message: "会社名またはアカウント数が不正です",
-      });
+    if (!companyName) {
+      errors.push({ row: i + 1, message: "会社名が空です" });
+      continue;
+    }
+    if (!Number.isFinite(quantity) || quantity < 0) {
+      errors.push({ row: i + 1, message: "数量が不正です" });
+      continue;
+    }
+    if (!startDate) {
+      errors.push({ row: i + 1, message: "契約開始日が不正です（例: 2026/9/1）" });
+      continue;
+    }
+    if (!endDate) {
+      errors.push({ row: i + 1, message: "契約終了日が不正です（例: 2026/9/30）" });
+      continue;
+    }
+    if (startDate.getTime() > endDate.getTime()) {
+      errors.push({ row: i + 1, message: "契約開始日が契約終了日より後になっています" });
       continue;
     }
 
-    const planTier = computePlanTier(accountCount);
-    const data = {
-      companyName,
-      accountCount,
-      planTier,
-      contactName: row.contactName?.trim() || null,
-      contactEmail: row.contactEmail?.trim() || null,
-      phone: row.phone?.trim() || null,
-      status: row.status?.trim() || "active",
-      externalId: row.externalId?.trim() || null,
-      notes: row.notes?.trim() || null,
-    };
-
     try {
-      // externalIdがあればそれで一意判定、無ければ会社名で既存を探す
-      const existing = data.externalId
-        ? await prisma.contract.findUnique({ where: { externalId: data.externalId } })
-        : await prisma.contract.findFirst({ where: { companyName } });
+      let contract = await prisma.contract.findFirst({ where: { companyName } });
 
-      if (existing) {
-        await prisma.contract.update({ where: { id: existing.id }, data });
-        updated++;
+      const contactPatch = {
+        ...(row.contactName?.trim() ? { contactName: row.contactName.trim() } : {}),
+        ...(row.contactEmail?.trim() ? { contactEmail: row.contactEmail.trim() } : {}),
+        ...(row.phone?.trim() ? { phone: row.phone.trim() } : {}),
+        ...(row.status?.trim() ? { status: row.status.trim() } : {}),
+        ...(row.notes?.trim() ? { notes: row.notes.trim() } : {}),
+      };
+
+      if (!contract) {
+        contract = await prisma.contract.create({
+          data: { companyName, ...contactPatch },
+        });
+        createdContractIds.add(contract.id);
+      } else if (Object.keys(contactPatch).length > 0) {
+        contract = await prisma.contract.update({
+          where: { id: contract.id },
+          data: contactPatch,
+        });
+        if (!createdContractIds.has(contract.id)) {
+          updatedContractIds.add(contract.id);
+        }
+      }
+
+      const externalId = row.externalId?.trim() || null;
+      const existingLine = externalId
+        ? await prisma.contractLine.findUnique({ where: { externalId } })
+        : await prisma.contractLine.findFirst({
+            where: { contractId: contract.id, contractType, startDate, endDate },
+          });
+
+      if (existingLine) {
+        await prisma.contractLine.update({
+          where: { id: existingLine.id },
+          data: { contractId: contract.id, contractType, quantity, startDate, endDate, externalId },
+        });
+        linesUpdated++;
       } else {
-        await prisma.contract.create({ data });
-        created++;
+        await prisma.contractLine.create({
+          data: { contractId: contract.id, contractType, quantity, startDate, endDate, externalId },
+        });
+        linesCreated++;
       }
     } catch (e) {
       errors.push({
@@ -75,5 +119,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ created, updated, errors });
+  return NextResponse.json({
+    companiesCreated: createdContractIds.size,
+    companiesUpdated: updatedContractIds.size,
+    linesCreated,
+    linesUpdated,
+    errors,
+  });
 }

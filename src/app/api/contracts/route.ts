@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { computePlanTier } from "@/lib/planTier";
+import { computeActiveAccountCount, parseDateOnly } from "@/lib/contractLines";
 
 // GET /api/contracts?tier=5+|10+|30+&q=検索語&status=active
+// アカウント数・プランはContractLineから都度集計するため、tierでの絞り込みは取得後にJS側で行う。
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const tier = searchParams.get("tier");
@@ -11,7 +13,6 @@ export async function GET(req: NextRequest) {
 
   const contracts = await prisma.contract.findMany({
     where: {
-      ...(tier ? { planTier: tier } : {}),
       ...(status ? { status } : {}),
       ...(q
         ? {
@@ -25,6 +26,7 @@ export async function GET(req: NextRequest) {
     },
     orderBy: { companyName: "asc" },
     include: {
+      contractLines: true,
       _count: { select: { supportLogs: true } },
       supportLogs: {
         orderBy: { occurredAt: "desc" },
@@ -33,17 +35,43 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  return NextResponse.json({ contracts });
+  const withComputed = contracts.map(({ contractLines, ...c }) => {
+    const accountCount = computeActiveAccountCount(contractLines);
+    return { ...c, accountCount, planTier: computePlanTier(accountCount) };
+  });
+
+  const filtered = tier ? withComputed.filter((c) => c.planTier === tier) : withComputed;
+
+  return NextResponse.json({ contracts: filtered });
 }
 
-// POST /api/contracts - 契約を1件手動登録
+// POST /api/contracts - 契約を1件手動登録（契約明細を1件作成する）
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { companyName, accountCount, contactName, contactEmail, phone, notes } = body;
+  const {
+    companyName,
+    quantity,
+    contractType,
+    startDate,
+    endDate,
+    contactName,
+    contactEmail,
+    phone,
+    notes,
+  } = body;
 
-  if (!companyName || typeof accountCount !== "number") {
+  if (!companyName || typeof quantity !== "number" || !startDate || !endDate) {
     return NextResponse.json(
-      { error: "companyName と accountCount(数値) は必須です" },
+      { error: "companyName, quantity(数値), startDate, endDate は必須です" },
+      { status: 400 }
+    );
+  }
+
+  const parsedStart = parseDateOnly(String(startDate));
+  const parsedEnd = parseDateOnly(String(endDate));
+  if (!parsedStart || !parsedEnd) {
+    return NextResponse.json(
+      { error: "startDate / endDate の形式が不正です（例: 2026-09-01）" },
       { status: 400 }
     );
   }
@@ -51,14 +79,25 @@ export async function POST(req: NextRequest) {
   const contract = await prisma.contract.create({
     data: {
       companyName,
-      accountCount,
-      planTier: computePlanTier(accountCount),
       contactName: contactName || null,
       contactEmail: contactEmail || null,
       phone: phone || null,
       notes: notes || null,
+      contractLines: {
+        create: {
+          quantity,
+          contractType: contractType || "",
+          startDate: parsedStart,
+          endDate: parsedEnd,
+        },
+      },
     },
+    include: { contractLines: true },
   });
 
-  return NextResponse.json({ contract }, { status: 201 });
+  const accountCount = computeActiveAccountCount(contract.contractLines);
+  return NextResponse.json(
+    { contract: { ...contract, accountCount, planTier: computePlanTier(accountCount) } },
+    { status: 201 }
+  );
 }

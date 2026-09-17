@@ -7,28 +7,41 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// 契約先（torimatoからCSVインポートする契約データ）
+// 契約先（会社単位）。アカウント数・サポートプランはContractLineから都度集計する
 model Contract {
-  id            String   @id @default(cuid())
-  companyName   String
-  accountCount  Int
-  planTier      String? // "5+" | "10+" | "30+" | null（5未満は対象外）
-  contactName   String?
-  contactEmail  String?
-  phone         String?
-  contractStart DateTime?
-  contractEnd   DateTime?
-  status        String   @default("active") // active | cancelled | paused
-  externalId    String?  @unique // torimato側の契約ID（あれば重複インポート防止に使う）
-  notes         String?
-  importedAt    DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  createdAt     DateTime @default(now())
+  id           String    @id @default(cuid())
+  companyName  String
+  contactName  String?
+  contactEmail String?
+  phone        String?
+  status       String    @default("active") // active | cancelled | paused
+  notes        String?
+  importedAt   DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  createdAt    DateTime  @default(now())
 
-  supportLogs SupportLog[]
+  contractLines ContractLine[]
+  supportLogs   SupportLog[]
 
-  @@index([planTier])
   @@index([companyName])
+}
+
+// 契約明細（torimatoの1行 = 月契約 or 年契約などの単位）
+// 会社単位のアカウント数は「現在日が開始日以上・終了日以下」の行のquantityを合算して算出する
+model ContractLine {
+  id           String   @id @default(cuid())
+  contractId   String
+  contract     Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  contractType String // 例: "月契約" | "年契約"（torimatoのCSV表記をそのまま保持）
+  quantity     Int
+  startDate    DateTime // 日付のみを保持（時刻は00:00 UTCに正規化）
+  endDate      DateTime // 同上
+  externalId   String?  @unique // torimato側の行の一意キー（あれば再インポート時の重複防止に使う）
+  importedAt   DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([contractId])
+  @@index([startDate, endDate])
 }
 
 // 対応履歴（メール送信ログ含む、誰が・いつ・何を対応したか）

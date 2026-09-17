@@ -1,23 +1,31 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
-import { PLAN_TIERS, PLAN_TIER_LABELS } from "@/lib/planTier";
+import { PLAN_TIERS, PLAN_TIER_LABELS, computePlanTier } from "@/lib/planTier";
+import { computeActiveAccountCount, todayUTC } from "@/lib/contractLines";
 import { PlanBadge } from "@/components/PlanBadge";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const [allTotal, activeTotal, tierCounts, recentLogs] = await Promise.all([
+  const [allTotal, activeTotal, contractsWithLines, recentLogs] = await Promise.all([
     prisma.contract.count(),
     prisma.contract.count({ where: { status: "active" } }),
-    Promise.all(
-      PLAN_TIERS.map((tier) => prisma.contract.count({ where: { planTier: tier } }))
-    ),
+    prisma.contract.findMany({ select: { contractLines: true } }),
     prisma.supportLog.findMany({
       orderBy: { occurredAt: "desc" },
       take: 10,
       include: { contract: { select: { id: true, companyName: true } } },
     }),
   ]);
+
+  // アカウント数・プランはContractLineから都度集計する（キャッシュを持たないため常に最新）
+  const now = todayUTC();
+  const tierCounts = PLAN_TIERS.map(
+    (tier) =>
+      contractsWithLines.filter(
+        (c) => computePlanTier(computeActiveAccountCount(c.contractLines, now)) === tier
+      ).length
+  );
 
   return (
     <div className="space-y-8">
