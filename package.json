@@ -9,7 +9,8 @@
     "lint": "next lint",
     "prisma:migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "verify": "tsx scripts/verify-import.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",
