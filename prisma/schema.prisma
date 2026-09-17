@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// 契約先（torimatoからCSVインポートする契約データ）
+model Contract {
+  id            String   @id @default(cuid())
+  companyName   String
+  accountCount  Int
+  planTier      String? // "5+" | "10+" | "30+" | null（5未満は対象外）
+  contactName   String?
+  contactEmail  String?
+  phone         String?
+  contractStart DateTime?
+  contractEnd   DateTime?
+  status        String   @default("active") // active | cancelled | paused
+  externalId    String?  @unique // torimato側の契約ID（あれば重複インポート防止に使う）
+  notes         String?
+  importedAt    DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+
+  supportLogs SupportLog[]
+
+  @@index([planTier])
+  @@index([companyName])
+}
+
+// 対応履歴（メール送信ログ含む、誰が・いつ・何を対応したか）
+model SupportLog {
+  id          String   @id @default(cuid())
+  contractId  String
+  contract    Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  type        String // "email" | "call" | "visit" | "note" | "other"
+  staffName   String
+  subject     String?
+  content     String
+  emailTo     String?
+  emailStatus String? // "sent" | "failed"（type=emailの場合のみ）
+  occurredAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  @@index([contractId])
+  @@index([occurredAt])
+}
+
+// メールテンプレート（プラン別の定型連絡文）
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  name      String
+  planTier  String? // 対象プラン。nullなら全プラン共通
+  subject   String
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// 担当者（ログイン無しのため対応記録用に名前だけ管理）
+model Staff {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+}
