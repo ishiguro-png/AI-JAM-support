@@ -34,7 +34,7 @@ export async function POST(
 
   const log = await prisma.supportLog.create({
     data: {
-      contractId: params.id,
+      contract: { connect: { id: params.id } },
       type,
       staffName,
       subject: subject || null,

@@ -139,7 +139,7 @@ export async function POST(req: NextRequest) {
         await prisma.contractLine.update({
           where: { id: existingLine.id },
           data: {
-            contractId: contract.id,
+            contract: { connect: { id: contract.id } },
             contractType,
             contractStatus,
             quantity,
@@ -154,7 +154,7 @@ export async function POST(req: NextRequest) {
       } else {
         await prisma.contractLine.create({
           data: {
-            contractId: contract.id,
+            contract: { connect: { id: contract.id } },
             contractType,
             contractStatus,
             quantity,
