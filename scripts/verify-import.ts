@@ -7,7 +7,10 @@
 //      （アプリのロジックとは別に、このスクリプト内で独立に再計算してクロスチェックする）
 //   3. contractStatusが未設定(null)の契約明細がないか（集計から漏れていないか確認するため）
 //   4. 契約ID（externalId）がContractLine間で重複していないか
-//   5. 契約種別（contractType）の集計・商品名との整合性
+//   5. 同一会社内で契約種別・契約期間が完全に一致する契約明細が複数存在しないか
+//      （externalIdだけが異なる「内容重複」。CSV再エクスポートのたびに契約IDの値が
+//      変わってしまう場合に典型的に発生する）
+//   6. 契約種別（contractType）の集計・商品名との整合性
 //      - 年契約/月契約/未設定それぞれの件数
 //      - 商品名が「【年間プラン】」なのにcontractTypeが「月契約」になっている件数
 //      - 商品名が「【月額プラン】」なのにcontractTypeが「年契約」になっている件数
@@ -125,7 +128,51 @@ async function main() {
   }
   console.log("");
 
-  // 5. 契約種別（contractType）の集計・商品名との整合性チェック
+  // 5. 内容重複チェック: 同一会社内で契約種別・契約開始日・契約終了日が完全に一致する
+  // 契約明細が複数存在しないか。externalIdだけが異なる場合、CSV再エクスポートのたびに
+  // 契約IDの値が変わる（＝安定した一意キーではない）ためのupsert失敗が疑われる。
+  let contentDuplicateGroups = 0;
+  let contentDuplicateExtraLines = 0;
+  for (const c of contracts) {
+    const byFingerprint = new Map<string, (typeof c.contractLines)[number][]>();
+    for (const l of c.contractLines) {
+      if (!l.contractType || !l.startDate || !l.endDate) continue; // 情報不足のものは対象外（別途目視確認）
+      const fp = `${l.contractType}|${l.startDate.toISOString()}|${l.endDate.toISOString()}`;
+      if (!byFingerprint.has(fp)) byFingerprint.set(fp, []);
+      byFingerprint.get(fp)!.push(l);
+    }
+    for (const [fp, list] of byFingerprint) {
+      if (list.length <= 1) continue;
+      hasProblem = true;
+      contentDuplicateGroups++;
+      contentDuplicateExtraLines += list.length - 1;
+      const [type, start, end] = fp.split("|");
+      console.log(
+        `[NG] ${c.companyName}: 契約種別・契約期間が同一の契約明細が ${list.length} 件あります ` +
+          `(${type} / ${start}〜${end})`
+      );
+      for (const l of list) {
+        console.log(
+          `      id=${l.id} externalId=${l.externalId ?? "(なし)"} ` +
+            `contractStatus=${l.contractStatus ?? "(未設定)"} quantity=${l.quantity} ` +
+            `updatedAt=${l.updatedAt.toISOString()}`
+        );
+      }
+    }
+  }
+  if (contentDuplicateGroups === 0) {
+    console.log("[OK] 契約種別・契約期間が同一の契約明細の重複はありません。");
+  } else {
+    console.log(
+      `[NG] 内容重複: ${contentDuplicateGroups}グループ（余剰 ${contentDuplicateExtraLines} 件）。` +
+        "契約ID(externalId)がCSVを再エクスポートするたびに変わる値になっている疑いがあります" +
+        "（同じ契約でも契約IDが毎回変わると、契約IDでの突合に失敗し新規行として作成され続けます）。" +
+        "npm run dedupe-lines で内容を確認・削除できます。"
+    );
+  }
+  console.log("");
+
+  // 6. 契約種別（contractType）の集計・商品名との整合性チェック
   const YEARLY_TAG = "【年間プラン】";
   const MONTHLY_TAG = "【月額プラン】";
   let yearlyCount = 0;
