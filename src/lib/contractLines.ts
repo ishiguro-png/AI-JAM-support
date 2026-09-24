@@ -79,36 +79,42 @@ export function stableIdentityFingerprint(line: StableIdentityInput): string | n
   ].join("|");
 }
 
-type FullContentInput = StableIdentityInput & {
+export type FullContentInput = StableIdentityInput & {
   quantity: number;
   contractStatus: string | null;
   amount: string | null;
 };
 
-// 「今この瞬間、externalId以外の全項目が完全に一致しているか」を表す厳密な指紋。
-// 再インポートのたびにexternalIdだけ変わって同じ内容の契約明細が増殖してしまった
-// ケースを検出・整理するために使う（npm run verify / npm run dedupe-lines）。
-// 数量・契約状態・金額も含めて完全一致を要求するため、時間経過で状態が変わった
-// 明細まで誤って同一視することは無い（その場合は指紋が変わり別グループになる）。
-export function fullContentFingerprint(line: FullContentInput): string {
-  return [
-    (line.contractType || "").trim(),
-    (line.productName || "").trim(),
-    String(line.quantity),
-    (line.contractStatus || "").trim(),
-    (line.amount || "").trim(),
-    line.startDate ? line.startDate.toISOString() : "null",
-    line.endDate ? line.endDate.toISOString() : "null",
-  ].join("|");
-}
+export type DedupeGroup<T> = {
+  confidence: "high" | "low";
+  lines: T[];
+};
 
-// fullContentFingerprintの信頼度。契約種別・商品名・契約期間が全て空/未設定だと
-// 数量・契約状態・金額だけで一致判定することになり、偶然の一致が起きやすい。
-export function fingerprintConfidence(
-  line: StableIdentityInput
-): "high" | "low" {
-  const type = (line.contractType || "").trim();
-  const product = (line.productName || "").trim();
-  const hasDates = !!(line.startDate && line.endDate);
-  return type || product || hasDates ? "high" : "low";
+// 「同じ契約明細らしさ」で契約明細（1つの会社の中）をグループ化する。
+// npm run verify / npm run dedupe-lines の重複検出・整理専用（インポート時の
+// 自動マッチングにはstableIdentityFingerprintを直接使う。取り違えないよう注意）。
+//
+// 判定は2段階:
+//   1. 商品名または契約期間のどちらかがあれば、stableIdentityFingerprint
+//      （契約種別・商品名・契約期間）でグループ化する（信頼度: high）。
+//      数量・契約状態・金額は含めないため、状態が進んだだけの明細
+//      （例: 契約前→契約中）も同じグループとして正しくまとめられる。
+//   2. 商品名も契約期間も無い場合のみ、契約種別・数量・契約状態・金額で
+//      グループ化する（信頼度: low）。手がかりが乏しく偶然の一致が
+//      起こりうるため、削除前に内容をよく確認することを推奨する表示に使う。
+export function groupLinesForDedupe<T extends FullContentInput>(lines: T[]): DedupeGroup<T>[] {
+  const groups = new Map<string, DedupeGroup<T>>();
+  for (const line of lines) {
+    const stable = stableIdentityFingerprint(line);
+    const confidence: "high" | "low" = stable !== null ? "high" : "low";
+    const key =
+      stable !== null
+        ? `S|${stable}`
+        : `W|${(line.contractType || "").trim()}|${String(line.quantity)}|` +
+          `${(line.contractStatus || "").trim()}|${(line.amount || "").trim()}`;
+
+    if (!groups.has(key)) groups.set(key, { confidence, lines: [] });
+    groups.get(key)!.lines.push(line);
+  }
+  return [...groups.values()];
 }
