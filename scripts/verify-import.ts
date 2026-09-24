@@ -7,9 +7,10 @@
 //      （アプリのロジックとは別に、このスクリプト内で独立に再計算してクロスチェックする）
 //   3. contractStatusが未設定(null)の契約明細がないか（集計から漏れていないか確認するため）
 //   4. 契約ID（externalId）がContractLine間で重複していないか
-//   5. 同一会社内で契約種別・契約期間が完全に一致する契約明細が複数存在しないか
-//      （externalIdだけが異なる「内容重複」。CSV再エクスポートのたびに契約IDの値が
-//      変わってしまう場合に典型的に発生する）
+//   5. 同一会社内でexternalId以外の全項目（契約種別・商品名・数量・契約状態・金額・
+//      契約期間）が完全に一致する契約明細が複数存在しないか（externalIdだけが異なる
+//      「内容重複」。CSV再エクスポートのたびに契約IDの値が変わってしまう場合に
+//      典型的に発生する）。あわせて表示用フィールドが軒並み未設定の契約明細も検出する
 //   6. 契約種別（contractType）の集計・商品名との整合性
 //      - 年契約/月契約/未設定それぞれの件数
 //      - 商品名が「【年間プラン】」なのにcontractTypeが「月契約」になっている件数
@@ -19,7 +20,12 @@
 // （会社数・契約明細数の合計）を再インポート前後で比較することで確認できる。
 
 import { PrismaClient } from "@prisma/client";
-import { ACTIVE_CONTRACT_STATUS, computeActiveAccountCount } from "../src/lib/contractLines";
+import {
+  ACTIVE_CONTRACT_STATUS,
+  computeActiveAccountCount,
+  fingerprintConfidence,
+  fullContentFingerprint,
+} from "../src/lib/contractLines";
 import { normalizeCompanyName } from "../src/lib/csvImportChecks";
 import { computePlanTier } from "../src/lib/planTier";
 
@@ -128,49 +134,78 @@ async function main() {
   }
   console.log("");
 
-  // 5. 内容重複チェック: 同一会社内で契約種別・契約開始日・契約終了日が完全に一致する
-  // 契約明細が複数存在しないか。externalIdだけが異なる場合、CSV再エクスポートのたびに
-  // 契約IDの値が変わる（＝安定した一意キーではない）ためのupsert失敗が疑われる。
+  // 5. 内容重複チェック: 同一会社内で契約種別・商品名・数量・契約状態・金額・契約期間が
+  // 全て一致する契約明細が複数存在しないか（externalId以外の全項目が完全一致＝
+  // fullContentFingerprintが一致）。externalIdだけが異なる場合、CSV再エクスポートの
+  // たびに契約IDの値が変わる（＝安定した一意キーではない）疑いがある。
   let contentDuplicateGroups = 0;
   let contentDuplicateExtraLines = 0;
+  let lowConfidenceGroups = 0;
   for (const c of contracts) {
     const byFingerprint = new Map<string, (typeof c.contractLines)[number][]>();
     for (const l of c.contractLines) {
-      if (!l.contractType || !l.startDate || !l.endDate) continue; // 情報不足のものは対象外（別途目視確認）
-      const fp = `${l.contractType}|${l.startDate.toISOString()}|${l.endDate.toISOString()}`;
+      const fp = fullContentFingerprint(l);
       if (!byFingerprint.has(fp)) byFingerprint.set(fp, []);
       byFingerprint.get(fp)!.push(l);
     }
-    for (const [fp, list] of byFingerprint) {
+    for (const list of byFingerprint.values()) {
       if (list.length <= 1) continue;
       hasProblem = true;
       contentDuplicateGroups++;
       contentDuplicateExtraLines += list.length - 1;
-      const [type, start, end] = fp.split("|");
+      const confidence = fingerprintConfidence(list[0]);
+      if (confidence === "low") lowConfidenceGroups++;
+      const l0 = list[0];
       console.log(
-        `[NG] ${c.companyName}: 契約種別・契約期間が同一の契約明細が ${list.length} 件あります ` +
-          `(${type} / ${start}〜${end})`
+        `[NG] ${c.companyName}${confidence === "low" ? " [信頼度: 低]" : ""}: ` +
+          `同一内容の契約明細が ${list.length} 件あります ` +
+          `(${l0.contractType || "(未設定)"} / ${l0.productName || "(未設定)"} / ` +
+          `数量${l0.quantity} / ${l0.contractStatus || "(未設定)"} / ${l0.amount || "(未設定)"})`
       );
       for (const l of list) {
-        console.log(
-          `      id=${l.id} externalId=${l.externalId ?? "(なし)"} ` +
-            `contractStatus=${l.contractStatus ?? "(未設定)"} quantity=${l.quantity} ` +
-            `updatedAt=${l.updatedAt.toISOString()}`
-        );
+        console.log(`      id=${l.id} externalId=${l.externalId ?? "(なし)"} updatedAt=${l.updatedAt.toISOString()}`);
       }
     }
   }
   if (contentDuplicateGroups === 0) {
-    console.log("[OK] 契約種別・契約期間が同一の契約明細の重複はありません。");
+    console.log("[OK] 内容が同一の契約明細の重複はありません。");
   } else {
     console.log(
       `[NG] 内容重複: ${contentDuplicateGroups}グループ（余剰 ${contentDuplicateExtraLines} 件）。` +
         "契約ID(externalId)がCSVを再エクスポートするたびに変わる値になっている疑いがあります" +
         "（同じ契約でも契約IDが毎回変わると、契約IDでの突合に失敗し新規行として作成され続けます）。" +
+        (lowConfidenceGroups > 0
+          ? ` うち${lowConfidenceGroups}グループは契約種別・商品名・契約期間が全て未設定で信頼度が低いため、`
+          : "") +
         "npm run dedupe-lines で内容を確認・削除できます。"
     );
   }
   console.log("");
+
+  // 5b. 表示用フィールド（契約種別・契約開始日・契約終了日・商品名）が軒並み未設定の
+  // 契約明細を検出する。全件でこれが起きている場合、CSVインポート画面でこれらの列を
+  // マッピングし忘れている可能性が高い（必須項目ではないため、マッピングしなくても
+  // エラーにはならず気付きにくい）。
+  let allFieldsUnsetCount = 0;
+  for (const c of contracts) {
+    for (const l of c.contractLines) {
+      if (!l.contractType && !l.startDate && !l.endDate && !l.productName) {
+        allFieldsUnsetCount++;
+      }
+    }
+  }
+  if (allFieldsUnsetCount > 0) {
+    const ratio = totalLines > 0 ? Math.round((allFieldsUnsetCount / totalLines) * 100) : 0;
+    console.log(
+      `[注意] 契約種別・契約開始日・契約終了日・商品名が全て未設定の契約明細が ` +
+        `${allFieldsUnsetCount}件（全体の${ratio}%）あります。` +
+        (ratio >= 50
+          ? "CSVインポート画面でこれらの列がマッピングされているか確認してください" +
+            "（必須項目ではないため、マッピングし忘れてもエラーにはならず気付きにくいです）。"
+          : "")
+    );
+    console.log("");
+  }
 
   // 6. 契約種別（contractType）の集計・商品名との整合性チェック
   const YEARLY_TAG = "【年間プラン】";

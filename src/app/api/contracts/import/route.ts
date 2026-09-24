@@ -119,21 +119,29 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // 契約明細の同一性は、可能な限り契約ID（externalId、torimato側の行の一意キー）で判定する。
-      // 契約IDが無い場合のみ契約種別・期間の組をフォールバックキーとして使うが、
-      // 開始日・終了日が両方揃っている場合に限る（どちらかが無いと、同じ会社の
-      // 複数の契約明細が誤って同一視され、他の行のcontractStatusで上書きされてしまうため）。
-      // contractStatusは再インポートのたびに変わりうる値なので、この照合キーには含めない
-      // （そうしないと"契約前→契約中"のような状態遷移が別明細として重複作成されてしまう）。
+      // 契約明細の同一性は、まず契約ID（externalId、torimato側の行の一意キー）で判定する。
+      // ただし契約IDはtorimatoの再エクスポートのたびに値が変わることがあり、それだけに
+      // 頼ると同じ契約明細が再インポートのたびに新規作成され続けてしまう。そのため契約IDで
+      // 見つからない場合は、契約種別・商品名・契約期間（＝時間が経っても変わらないはずの
+      // 識別情報）が完全一致する既存の契約明細を探し、見つかればそれを更新する
+      // （商品名と契約期間の両方が無いと識別力が弱すぎるため、その場合はフォールバックせず
+      // 新規作成する）。
+      // 数量・契約状態・金額はこの照合キーに含めない（時間経過で正しく変わりうる値であり、
+      // 含めてしまうと"契約前→契約中"のような状態遷移のたびに別明細が重複作成されてしまう）。
       const externalId = row.externalId?.trim() || null;
-      const canUseDateFallback = !externalId && startDate && endDate;
-      const existingLine = externalId
+      let existingLine = externalId
         ? await prisma.contractLine.findUnique({ where: { externalId } })
-        : canUseDateFallback
-          ? await prisma.contractLine.findFirst({
-              where: { contractId: contract.id, contractType, startDate, endDate },
-            })
-          : null;
+        : null;
+
+      if (!existingLine) {
+        const hasDates = !!(startDate && endDate);
+        const hasProduct = !!productName;
+        if (hasDates || hasProduct) {
+          existingLine = await prisma.contractLine.findFirst({
+            where: { contractId: contract.id, contractType, productName, startDate, endDate },
+          });
+        }
+      }
 
       if (existingLine) {
         await prisma.contractLine.update({

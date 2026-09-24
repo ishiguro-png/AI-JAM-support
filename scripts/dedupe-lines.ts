@@ -1,5 +1,6 @@
-// 内容が同じ（契約種別・契約開始日・契約終了日が完全一致）なのに、externalId(契約ID)だけが
-// 異なるためにContractLineが重複作成されてしまったケースを整理するスクリプト。
+// 内容が同じ（会社名・契約種別・商品名・数量・契約状態・金額・契約開始日・契約終了日が
+// 全て一致）なのに、externalId(契約ID)だけが異なるためにContractLineが重複作成されて
+// しまったケースを安全に整理するスクリプト。
 //
 // 典型的な原因: CSVの「契約ID」列が、torimatoの再エクスポートのたびに違う値になってしまい
 // （安定した一意キーではない）、契約IDでの突合に失敗して同じ契約明細が何度も新規作成される。
@@ -8,12 +9,19 @@
 //   npm run dedupe-lines            … 削除対象を表示するだけ（何も削除しない・安全）
 //   npm run dedupe-lines -- --apply … 実際に削除する
 //
-// 同一会社・同一契約種別・同一契約期間（開始日・終了日）のグループごとに、
-// 最もupdatedAtが新しい1件だけを残し、他は削除する（＝直近のCSVインポートで
-// 反映された最新の状態を優先する）。契約種別・開始日・終了日のいずれかが
-// 未設定（null）の契約明細は対象外とし、手動確認に回す（誤削除を避けるため）。
+// 判定方法: 同一Contract配下で、契約種別・商品名・数量・契約状態・金額・契約開始日・
+// 契約終了日（externalId以外の全項目）が完全に一致する契約明細をグループ化する。
+// 全項目が完全一致する場合のみ「同一内容」とみなすため、状態が進んだ明細
+// （例: 契約前→契約中に変わった明細）は指紋が変わり別グループとして扱われ、
+// 誤って削除されることはない。各グループでは最もupdatedAtが新しい1件だけを残し、
+// 他は削除する（＝直近のCSVインポートで反映された最新の状態を優先する）。
+//
+// 契約種別・商品名・契約期間が全て空/未設定のグループは、数量・契約状態・金額だけで
+// 一致判定することになり偶然の一致が起きやすいため「信頼度: 低」として表示する
+// （削除自体は行うが、--apply前に内容をよく確認することを推奨）。
 
 import { PrismaClient } from "@prisma/client";
+import { fingerprintConfidence, fullContentFingerprint } from "../src/lib/contractLines";
 
 const prisma = new PrismaClient();
 
@@ -26,40 +34,45 @@ async function main() {
   });
 
   let groupsFound = 0;
-  let linesToDelete: string[] = [];
-  let skippedForReview = 0;
+  let lowConfidenceGroups = 0;
+  const linesToDelete: string[] = [];
 
   for (const c of contracts) {
     const byFingerprint = new Map<string, (typeof c.contractLines)[number][]>();
     for (const l of c.contractLines) {
-      if (!l.contractType || !l.startDate || !l.endDate) {
-        continue; // 情報不足のものは自動削除の対象外
-      }
-      const fp = `${l.contractType}|${l.startDate.toISOString()}|${l.endDate.toISOString()}`;
+      const fp = fullContentFingerprint(l);
       if (!byFingerprint.has(fp)) byFingerprint.set(fp, []);
       byFingerprint.get(fp)!.push(l);
     }
 
-    for (const [fp, list] of byFingerprint) {
+    for (const list of byFingerprint.values()) {
       if (list.length <= 1) continue;
       groupsFound++;
+      const confidence = fingerprintConfidence(list[0]);
+      if (confidence === "low") lowConfidenceGroups++;
+
       const sorted = [...list].sort(
         (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
       );
       const keep = sorted[0];
       const remove = sorted.slice(1);
-      const [type, start, end] = fp.split("|");
 
-      console.log(`${c.companyName} (${type} / ${start}〜${end}): ${list.length}件 → 1件に整理`);
+      console.log(
+        `${c.companyName}${confidence === "low" ? " [信頼度: 低]" : ""}: ` +
+          `契約種別=${keep.contractType || "(未設定)"} / 商品名=${keep.productName || "(未設定)"} / ` +
+          `数量=${keep.quantity} / 契約状態=${keep.contractStatus || "(未設定)"} / ` +
+          `金額=${keep.amount || "(未設定)"} / ` +
+          `期間=${keep.startDate ? keep.startDate.toISOString().slice(0, 10) : "(未設定)"}〜` +
+          `${keep.endDate ? keep.endDate.toISOString().slice(0, 10) : "(未設定)"}`
+      );
+      console.log(`  → この${list.length}件は同一内容だがexternalIdだけ違う:`);
       console.log(
         `  残す: id=${keep.id} externalId=${keep.externalId ?? "(なし)"} ` +
-          `contractStatus=${keep.contractStatus ?? "(未設定)"} quantity=${keep.quantity} ` +
           `updatedAt=${keep.updatedAt.toISOString()}`
       );
       for (const r of remove) {
         console.log(
           `  削除: id=${r.id} externalId=${r.externalId ?? "(なし)"} ` +
-            `contractStatus=${r.contractStatus ?? "(未設定)"} quantity=${r.quantity} ` +
             `updatedAt=${r.updatedAt.toISOString()}`
         );
       }
@@ -67,25 +80,14 @@ async function main() {
     }
   }
 
-  // 契約種別・開始日・終了日のいずれかが未設定で自動判定できなかった重複候補を、
-  // 参考情報として別途一覧表示する（自動削除はしない）
-  for (const c of contracts) {
-    const incomplete = c.contractLines.filter(
-      (l) => !l.contractType || !l.startDate || !l.endDate
-    );
-    if (incomplete.length > 1) {
-      skippedForReview += incomplete.length;
-      console.log(
-        `[要目視確認] ${c.companyName}: 契約種別/契約開始日/契約終了日が未設定の契約明細が` +
-          `${incomplete.length}件あります（自動判定できないため対象外。Prisma Studioで確認してください）`
-      );
-    }
-  }
-
   console.log("");
   console.log(`重複グループ: ${groupsFound}件 / 削除対象: ${linesToDelete.length}件`);
-  if (skippedForReview > 0) {
-    console.log(`要目視確認（自動対象外）: ${skippedForReview}件`);
+  if (lowConfidenceGroups > 0) {
+    console.log(
+      `  うち信頼度が低いグループ: ${lowConfidenceGroups}件` +
+        "（契約種別・商品名・契約期間が全て未設定で、数量・契約状態・金額だけで一致判定しています。" +
+        "内容をよく確認してから--applyしてください）"
+    );
   }
 
   if (linesToDelete.length === 0) {

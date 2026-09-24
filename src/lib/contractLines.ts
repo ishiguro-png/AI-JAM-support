@@ -46,3 +46,69 @@ export function parseDateOnly(input: string): Date | null {
   }
   return date;
 }
+
+// --- 契約明細の「同一性」を判定するための指紋 -----------------------------------
+//
+// 契約ID（externalId）はtorimatoの再エクスポートのたびに値が変わることがあり、
+// それだけに頼ると同じ契約明細が再インポートのたびに新規作成され続けてしまう。
+// そのため、契約ID以外の情報からも「同じ契約明細らしさ」を判定できるようにする。
+// 用途に応じて2種類の指紋を使い分ける。
+
+type StableIdentityInput = {
+  contractType: string;
+  productName: string | null;
+  startDate: Date | null;
+  endDate: Date | null;
+};
+
+// 「本来、時間が経っても変わらないはずの識別情報」だけを使った指紋（インポート時の
+// 同一明細判定に使用）。数量・契約状態・金額は状態の変化で正しく変わりうるため含めない。
+// 契約種別だけでは会社内で複数の同種契約と衝突しやすいため、商品名または契約期間の
+// どちらか一方が無いと識別力が弱すぎると判断し、その場合はnullを返す
+// （＝この指紋では安全にマッチさせられない＝新規作成するしかない、という意味）。
+export function stableIdentityFingerprint(line: StableIdentityInput): string | null {
+  const type = (line.contractType || "").trim();
+  const product = (line.productName || "").trim();
+  const hasDates = !!(line.startDate && line.endDate);
+  if (!product && !hasDates) return null;
+  return [
+    type,
+    product,
+    line.startDate ? line.startDate.toISOString() : "null",
+    line.endDate ? line.endDate.toISOString() : "null",
+  ].join("|");
+}
+
+type FullContentInput = StableIdentityInput & {
+  quantity: number;
+  contractStatus: string | null;
+  amount: string | null;
+};
+
+// 「今この瞬間、externalId以外の全項目が完全に一致しているか」を表す厳密な指紋。
+// 再インポートのたびにexternalIdだけ変わって同じ内容の契約明細が増殖してしまった
+// ケースを検出・整理するために使う（npm run verify / npm run dedupe-lines）。
+// 数量・契約状態・金額も含めて完全一致を要求するため、時間経過で状態が変わった
+// 明細まで誤って同一視することは無い（その場合は指紋が変わり別グループになる）。
+export function fullContentFingerprint(line: FullContentInput): string {
+  return [
+    (line.contractType || "").trim(),
+    (line.productName || "").trim(),
+    String(line.quantity),
+    (line.contractStatus || "").trim(),
+    (line.amount || "").trim(),
+    line.startDate ? line.startDate.toISOString() : "null",
+    line.endDate ? line.endDate.toISOString() : "null",
+  ].join("|");
+}
+
+// fullContentFingerprintの信頼度。契約種別・商品名・契約期間が全て空/未設定だと
+// 数量・契約状態・金額だけで一致判定することになり、偶然の一致が起きやすい。
+export function fingerprintConfidence(
+  line: StableIdentityInput
+): "high" | "low" {
+  const type = (line.contractType || "").trim();
+  const product = (line.productName || "").trim();
+  const hasDates = !!(line.startDate && line.endDate);
+  return type || product || hasDates ? "high" : "low";
+}
