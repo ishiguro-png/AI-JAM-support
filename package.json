@@ -11,7 +11,8 @@
     "prisma:generate": "prisma generate",
     "seed": "tsx prisma/seed.ts",
     "verify": "tsx scripts/verify-import.ts",
-    "dedupe-lines": "tsx scripts/dedupe-lines.ts"
+    "dedupe-lines": "tsx scripts/dedupe-lines.ts",
+    "diagnose": "tsx scripts/diagnose-duplicates.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",

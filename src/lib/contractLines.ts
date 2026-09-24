@@ -118,3 +118,55 @@ export function groupLinesForDedupe<T extends FullContentInput>(lines: T[]): Ded
   }
   return [...groups.values()];
 }
+
+// --- 診断用: インポート「バッチ」の検出と行単位の比較 -----------------------------
+//
+// 契約種別・商品名・契約期間がどれも無いと、質・契約状態・金額だけでは重複を
+// 安全に判定できない（偶然の一致・誤統合のリスクがある）。npm run diagnose は
+// 削除や統合を一切行わず、importedAtの間隔から「同じCSVインポート由来と思われる
+// 行の集まり（バッチ）」を検出し、バッチ間で同じ順番の行を突き合わせて
+// どの項目が違うために重複とみなされないのかを人が確認できるようにする。
+
+export type BatchableLine = { id: string; importedAt: Date };
+
+// 1回のCSVインポートは全行を短時間（多くの場合1秒未満〜数秒）で処理するため、
+// importedAtの間隔が閾値（既定5分）を超えて空いていれば別のインポート実行
+// （＝別バッチ）とみなす。
+export function detectImportBatches<T extends BatchableLine>(
+  lines: T[],
+  gapMs: number = 5 * 60 * 1000
+): T[][] {
+  const sorted = [...lines].sort((a, b) => {
+    const diff = a.importedAt.getTime() - b.importedAt.getTime();
+    return diff !== 0 ? diff : a.id.localeCompare(b.id);
+  });
+
+  const batches: T[][] = [];
+  for (const line of sorted) {
+    const current = batches[batches.length - 1];
+    const prev = current?.[current.length - 1];
+    if (current && prev && line.importedAt.getTime() - prev.importedAt.getTime() <= gapMs) {
+      current.push(line);
+    } else {
+      batches.push([line]);
+    }
+  }
+  return batches;
+}
+
+// 2つの契約明細を比較し、値が異なるフィールド名の一覧を返す（空配列なら完全一致）。
+export function diffFields(a: FullContentInput, b: FullContentInput): string[] {
+  const diffs: string[] = [];
+  if ((a.contractType || "").trim() !== (b.contractType || "").trim()) diffs.push("contractType");
+  if ((a.productName || "").trim() !== (b.productName || "").trim()) diffs.push("productName");
+  if (a.quantity !== b.quantity) diffs.push("quantity");
+  if ((a.contractStatus || "").trim() !== (b.contractStatus || "").trim()) diffs.push("contractStatus");
+  if ((a.amount || "").trim() !== (b.amount || "").trim()) diffs.push("amount");
+  const aStart = a.startDate ? a.startDate.getTime() : null;
+  const bStart = b.startDate ? b.startDate.getTime() : null;
+  if (aStart !== bStart) diffs.push("startDate");
+  const aEnd = a.endDate ? a.endDate.getTime() : null;
+  const bEnd = b.endDate ? b.endDate.getTime() : null;
+  if (aEnd !== bEnd) diffs.push("endDate");
+  return diffs;
+}
