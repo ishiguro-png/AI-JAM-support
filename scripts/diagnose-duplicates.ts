@@ -17,6 +17,14 @@
 //   npm run diagnose -- --all            … 差異のある会社を全件表示
 //   npm run diagnose -- --company=株式会社テスト1 … 特定の会社だけ詳細表示
 //   npm run diagnose -- --gap-minutes=10 … バッチ判定の間隔閾値を変更（既定5分）
+//   npm run diagnose -- --gap-seconds=30 … バッチ判定の間隔閾値を秒単位で変更（--gap-minutesより優先）
+//   npm run diagnose -- --time-gaps=30   … importedAtの間隔一覧の表示件数を変更（既定20件）
+//
+// 常に最初に、全社・全件のimportedAtの分布（最小/最大時刻、秒単位のレコード数、
+// 間隔が大きい箇所の一覧）を表示する。バッチ判定の間隔閾値（既定5分）が実際の
+// インポート回数の境界と合っていない場合（例: 3回のインポートのうち2回が
+// 5分以内に行われた等）、ここで実際の間隔を確認してから --gap-minutes /
+// --gap-seconds で閾値を調整すること。
 
 import { PrismaClient } from "@prisma/client";
 import { detectImportBatches, diffFields } from "../src/lib/contractLines";
@@ -47,9 +55,82 @@ async function main() {
   const args = process.argv.slice(2);
   const showAll = args.includes("--all");
   const companyFilter = args.find((a) => a.startsWith("--company="))?.split("=")[1];
-  const gapArg = args.find((a) => a.startsWith("--gap-minutes="))?.split("=")[1];
-  const gapMs = (gapArg ? Number(gapArg) : 5) * 60 * 1000;
+  const gapMinutesArg = args.find((a) => a.startsWith("--gap-minutes="))?.split("=")[1];
+  const gapSecondsArg = args.find((a) => a.startsWith("--gap-seconds="))?.split("=")[1];
+  const gapMs = gapSecondsArg
+    ? Number(gapSecondsArg) * 1000
+    : (gapMinutesArg ? Number(gapMinutesArg) : 5) * 60 * 1000;
+  const timeGapsArg = args.find((a) => a.startsWith("--time-gaps="))?.split("=")[1];
+  const timeGapsLimit = timeGapsArg ? Number(timeGapsArg) : 20;
   const limit = companyFilter || showAll ? Infinity : 10;
+
+  // 0. importedAtの生の分布（全社・全件、--companyの絞り込みとは無関係に常に全体を見る）。
+  //    バッチ判定は「間隔が閾値を超えたら別バッチ」という仮定に基づいているため、
+  //    実際のインポート回数の境界がどこにあるかをまず生データで確認する。
+  const allLineTimes = (await prisma.contractLine.findMany({ select: { importedAt: true } }))
+    .map((l) => l.importedAt.getTime())
+    .sort((a, b) => a - b);
+
+  console.log(`=== importedAtの分布（全社・全${allLineTimes.length}件） ===`);
+  if (allLineTimes.length === 0) {
+    console.log("契約明細がありません。");
+    await prisma.$disconnect();
+    return;
+  }
+  console.log(`最小時刻: ${new Date(allLineTimes[0]).toISOString()}`);
+  console.log(`最大時刻: ${new Date(allLineTimes[allLineTimes.length - 1]).toISOString()}`);
+
+  const bucketBySecond = new Map<number, number>();
+  for (const t of allLineTimes) {
+    const secKey = Math.floor(t / 1000) * 1000;
+    bucketBySecond.set(secKey, (bucketBySecond.get(secKey) || 0) + 1);
+  }
+  const sortedBuckets = [...bucketBySecond.entries()].sort((a, b) => a[0] - b[0]);
+  console.log(`秒単位でのユニークな時刻数: ${sortedBuckets.length}`);
+  console.log("秒ごとのレコード数:");
+  const bucketDisplayLimit = 300;
+  const bucketsToShow = showAll ? sortedBuckets : sortedBuckets.slice(0, bucketDisplayLimit);
+  for (const [sec, count] of bucketsToShow) {
+    console.log(`  ${new Date(sec).toISOString()}: ${count}件`);
+  }
+  if (!showAll && sortedBuckets.length > bucketDisplayLimit) {
+    console.log(
+      `  ...(以下${sortedBuckets.length - bucketDisplayLimit}件省略。--all で全件表示)`
+    );
+  }
+  console.log("");
+
+  // 連続するレコード（importedAt順にソート）の間の間隔が大きい箇所を上位表示する。
+  // インポートを複数回実行した場合、その境界には他の間隔より明らかに大きいギャップが
+  // 生じるはず。ギャップの数が「インポート回数-1」と一致しない場合、閾値の調整だけでは
+  // 正しく分離できない可能性がある（インポート自体が途中で止まっていた等）。
+  type Gap = { fromMs: number; toMs: number; gapMs: number; beforeCount: number; afterCount: number };
+  const gaps: Gap[] = [];
+  for (let i = 1; i < allLineTimes.length; i++) {
+    gaps.push({
+      fromMs: allLineTimes[i - 1],
+      toMs: allLineTimes[i],
+      gapMs: allLineTimes[i] - allLineTimes[i - 1],
+      beforeCount: i,
+      afterCount: allLineTimes.length - i,
+    });
+  }
+  const topGaps = [...gaps].sort((a, b) => b.gapMs - a.gapMs).slice(0, timeGapsLimit);
+  console.log(
+    `=== 間隔が大きい上位${topGaps.length}件（インポート実行の境界の候補。--time-gaps=Nで件数変更） ===`
+  );
+  for (const g of topGaps) {
+    console.log(
+      `  ${new Date(g.fromMs).toISOString()} → ${new Date(g.toMs).toISOString()} : ` +
+        `${(g.gapMs / 1000).toFixed(1)}秒（この時点までの累積件数: ${g.beforeCount}件 / 以降: ${g.afterCount}件）`
+    );
+  }
+  console.log("");
+  console.log(
+    `[参考] 現在の --gap-minutes/--gap-seconds によるバッチ判定の閾値: ${(gapMs / 1000).toFixed(1)}秒。` +
+      "上の間隔一覧と見比べて、実際のインポート回数の境界に合っているか確認してください。"
+  );
+  console.log("");
 
   const contracts = await prisma.contract.findMany({
     where: companyFilter ? { companyName: companyFilter } : {},
@@ -73,7 +154,7 @@ async function main() {
     batchCountHistogram.set(batches.length, (batchCountHistogram.get(batches.length) || 0) + 1);
   }
 
-  console.log(`=== バッチ検出サマリ（間隔閾値: ${gapMs / 60000}分） ===`);
+  console.log(`=== バッチ検出サマリ（間隔閾値: ${(gapMs / 1000).toFixed(1)}秒） ===`);
   console.log(`会社数: ${contracts.length}`);
   console.log(`契約明細数(合計): ${contracts.reduce((s, c) => s + c.contractLines.length, 0)}`);
   console.log("会社ごとのバッチ数の内訳:");
