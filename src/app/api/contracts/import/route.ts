@@ -147,9 +147,26 @@ export async function POST(req: NextRequest) {
   // 2. 会社単位でグループ化する。会社ID（顧客ID）があれば会社ID、無ければ正規化した会社名で
   //    まとめる。契約ID（externalId）はグルーピングキーに含めない
   //    （同じ顧客IDで契約IDだけが異なる複数行は、必ず同一会社の複数契約明細として扱われる）。
+  //
+  //    torimatoのCSVでは、同じ会社の行でも一部の行にだけ顧客IDが入っている（他の行は
+  //    空欄）ことがある。単純に「行ごとに顧客IDがあればID、無ければ会社名」でキーを
+  //    決めると、同じ会社の行が「id:...」グループと「name:...」グループに分かれてしまい、
+  //    同一会社が複数のContractに分裂したり、後から処理されるグループのdeleteMany+createMany
+  //    が先に作成した契約明細を消してしまう（一見1社に見えても中身が消える）事故につながる。
+  //    そのため先に、正規化した会社名ごとに「この会社名の行のどれかが持っている顧客ID」を
+  //    1つ解決し（companyIdByName）、その会社名の全ての行に対して同じ顧客IDを適用してから
+  //    グループ化する。
+  const companyIdByName = new Map<string, string>();
+  for (const row of parsedRows) {
+    if (row.companyExternalId && !companyIdByName.has(row.companyName)) {
+      companyIdByName.set(row.companyName, row.companyExternalId);
+    }
+  }
+
   const groups = new Map<string, ParsedRow[]>();
   for (const row of parsedRows) {
-    const key = row.companyExternalId ? `id:${row.companyExternalId}` : `name:${row.companyName}`;
+    const resolvedCompanyExternalId = row.companyExternalId || companyIdByName.get(row.companyName) || null;
+    const key = resolvedCompanyExternalId ? `id:${resolvedCompanyExternalId}` : `name:${row.companyName}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(row);
   }
@@ -164,9 +181,16 @@ export async function POST(req: NextRequest) {
     const companyName = groupRows[0].companyName;
 
     try {
+      // 会社IDで見つからない場合（過去に会社名だけで作成された会社に、今回初めて
+      // 会社IDが判明したケースなど）も、会社名で既存のContractを探してから新規作成する。
+      // ここでフォールバックしないと、同じ会社が「会社名だけで作られた既存Contract」と
+      // 「今回のCSVで会社IDから新規作成されるContract」の2件に分裂してしまう。
       let contract = companyExternalId
         ? await prisma.contract.findUnique({ where: { externalId: companyExternalId } })
-        : await prisma.contract.findFirst({ where: { companyName } });
+        : null;
+      if (!contract) {
+        contract = await prisma.contract.findFirst({ where: { companyName } });
+      }
 
       // 連絡先などの付随情報は、今回のCSV内でその会社に該当する行の中から
       // 値が入っている最初のものを採用する（空欄の行で既存の値を消さないため、
