@@ -60,9 +60,17 @@ type ParsedRow = {
 // ContractLineが増殖することはない。同じCSVを3回インポートしても、3回目の
 // ContractLine件数は常に「そのCSVの行数」のままになる。
 //
-// 会社（Contract）は従来どおり会社単位で管理する。会社IDがあれば会社IDを優先し、
-// 無ければ正規化した会社名でまとめる。会社そのもの・SupportLog・担当者・メール
-// テンプレートはCSV再インポートで削除しない（削除・置き換えの対象はContractLineのみ）。
+// 会社（Contract）は従来どおり会社単位で管理する。会社ID（companyExternalId、
+// torimatoの「顧客ID」）があれば会社IDを優先し、無ければ正規化した会社名でまとめる。
+// 会社そのもの・SupportLog・担当者・メールテンプレートはCSV再インポートで削除しない
+// （削除・置き換えの対象はContractLineのみ）。
+//
+// 重要: 契約明細のexternalId（torimatoの「契約ID」）は会社の識別・Contractの作成・
+// 分割判定には一切使用しない。torimatoでは同じ顧客・同じ会社でも契約ごとに異なる
+// 契約IDを持つのが正しい状態であり、契約IDを会社識別に使うと同じ会社が契約の数だけ
+// 複数のContractに分裂してしまう。そのため会社のグルーピングキー（下記グループ化）は
+// companyExternalId（顧客ID）またはcompanyName（会社名）のみを使い、
+// ParsedRow.externalId（契約ID）はグルーピングに一切関与させない。
 //
 // アカウント数の集計は「契約状態（contractStatus）」列だけを基準に行う。
 // 契約開始日・終了日は無料期間や契約切り替えの都合で実際の契約状態と一致しないことが
@@ -136,7 +144,9 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // 2. 会社単位でグループ化する。会社IDがあれば会社ID、無ければ正規化した会社名でまとめる。
+  // 2. 会社単位でグループ化する。会社ID（顧客ID）があれば会社ID、無ければ正規化した会社名で
+  //    まとめる。契約ID（externalId）はグルーピングキーに含めない
+  //    （同じ顧客IDで契約IDだけが異なる複数行は、必ず同一会社の複数契約明細として扱われる）。
   const groups = new Map<string, ParsedRow[]>();
   for (const row of parsedRows) {
     const key = row.companyExternalId ? `id:${row.companyExternalId}` : `name:${row.companyName}`;
