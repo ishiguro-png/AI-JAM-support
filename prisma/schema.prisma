@@ -14,7 +14,7 @@ datasource db {
 model Contract {
   id           String    @id @default(cuid())
   companyName  String
-  externalId   String?   @unique // torimato側の会社・顧客ID（あれば会社名より優先して同一会社の判定に使う）
+  externalId   String?   @unique // torimato側の会社・顧客ID。CSVにあれば会社名より優先して同一会社の判定に使う
   contactName  String?
   contactEmail String?
   phone        String?
@@ -30,7 +30,10 @@ model Contract {
   @@index([companyName])
 }
 
-// 契約明細（torimatoの1行 = 月契約 or 年契約などの単位）
+// 契約明細（torimatoの1行 = 月契約 or 年契約などの単位）。
+// 「最新のtorimato CSVが現在の契約状態の正」という方針のため、CSVインポートのたびに
+// その会社のContractLineは全件削除してCSVの内容で作り直す（過去のCSVとの突合・
+// upsertは行わない）。そのため契約IDが再エクスポートのたびに変わっても増殖しない。
 // 会社単位のアカウント数は「contractStatus = 契約中」の行のquantityを合算して算出する。
 // 契約開始日・終了日は無料期間や契約切り替えの都合で実態と一致しないことがあるため、
 // 表示用データとしてのみ保持し、集計判定には一切使用しない。
@@ -45,7 +48,7 @@ model ContractLine {
   endDate        DateTime? // 表示用のみ。集計には使用しない
   productName    String? // 商品名（表示用・検証用。CSVの表記をそのまま保持）
   amount         String? // 金額（表示用・検証用。書式（カンマ・通貨記号）を保持するため文字列で保存）
-  externalId     String?  @unique // torimato側の行の一意キー（あれば再インポート時の重複防止に使う）
+  externalId     String?  @unique // torimato側の行の一意キー（表示用のみ。再インポート時の同一性判定には使用しない）
   importedAt     DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -87,4 +90,20 @@ model Staff {
   id        String   @id @default(cuid())
   name      String   @unique
   createdAt DateTime @default(now())
+}
+
+// CSVインポートの実行履歴。「最新CSVが現在の契約状態の正」という方針のもと、
+// ContractLineは再インポートのたびに最新CSVの内容へ置き換えるため、過去の
+// インポート内容そのもの（行単位の中身）はContractLineとしては残らない。
+// 「いつ・どのファイルを・何件・何社・成功/エラー何件で取り込んだか」という
+// 実行ログだけをここに残す。
+model ImportBatch {
+  id           String   @id @default(cuid())
+  importedAt   DateTime @default(now())
+  fileName     String?
+  rowCount     Int
+  companyCount Int
+  successCount Int
+  errorCount   Int
+  createdAt    DateTime @default(now())
 }

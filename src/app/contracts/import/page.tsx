@@ -49,10 +49,11 @@ const FIELDS: { key: FieldKey; label: string; required?: boolean; hint?: string 
   { key: "amount", label: "金額", hint: "表示用のみ（集計には使用しません）" },
   {
     key: "externalId",
-    label: "契約ID（契約明細1行の一意キー）",
+    label: "契約ID（契約明細1行の一意キー・表示用）",
     hint:
       "自動推測はしません。この契約明細行だけを指す値（行ごとに異なるのが正しい状態）の列を選んでください。" +
-      "会社ID・顧客IDなど複数行で共通になる列を選ばないでください。",
+      "会社ID・顧客IDなど複数行で共通になる列を選ばないでください。" +
+      "インポートのたびに契約明細は今回のCSV内容で置き換わるため、再インポート時の同一性判定には使用しません（表示用のみ）。",
   },
   { key: "contactName", label: "担当者名" },
   { key: "contactEmail", label: "メールアドレス" },
@@ -101,8 +102,8 @@ export default function ImportPage() {
   const [result, setResult] = useState<{
     companiesCreated: number;
     companiesUpdated: number;
-    linesCreated: number;
-    linesUpdated: number;
+    linesImported: number;
+    companyCount: number;
     errors: { row: number; message: string }[];
     warnings?: string[];
   } | null>(null);
@@ -164,7 +165,7 @@ export default function ImportPage() {
       const res = await fetch("/api/contracts/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: mappedRows }),
+        body: JSON.stringify({ rows: mappedRows, fileName }),
       });
       const data = await res.json();
       setResult(data);
@@ -194,8 +195,15 @@ export default function ImportPage() {
         会社の同一性は「会社ID」があればそれを優先して判定し、無い場合のみ会社名で判定します。
         会社名だけの判定は表記ゆれ（全角/半角スペースの違いなど）で同じ会社が別の契約先として
         重複登録されてしまうことがあるため、torimato側に顧客ID等の列があれば
-        必ずマッピングしてください。契約明細（行）の同一性も同様に、契約IDがあれば
-        それを優先します。
+        必ずマッピングしてください。
+      </p>
+      <p className="text-sm text-slate-500">
+        <strong>「最新のCSVが現在の契約状態の正」</strong>という方針のため、会社ごとの契約明細は
+        インポートのたびに今回のCSVの内容で完全に置き換わります（契約IDが再エクスポートの
+        たびに変わっても、契約明細が増殖することはありません）。過去の契約明細そのものを
+        残したい場合は、別途インポート履歴（ImportBatch）にファイル名・件数などの実行記録が
+        残ります。サポート対応履歴（担当履歴・メール送信履歴）は会社（Contract）に
+        紐づいており、CSVの再インポートで削除されることはありません。
       </p>
 
       <div className="card space-y-4 p-4">
@@ -298,7 +306,8 @@ export default function ImportPage() {
           <div className="rounded-md bg-slate-50 p-3 text-sm">
             <p>
               会社: 新規{result.companiesCreated}件 / 更新{result.companiesUpdated}件
-              契約明細: 新規{result.linesCreated}件 / 更新{result.linesUpdated}件
+              （CSV内の会社数: {result.companyCount}件） / 契約明細: 今回のCSVで{result.linesImported}
+              件に置き換え
               {result.errors.length > 0 && ` / エラー: ${result.errors.length}件`}
             </p>
             {result.warnings && result.warnings.length > 0 && (

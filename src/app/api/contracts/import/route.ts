@@ -24,15 +24,37 @@ type ImportRow = {
   notes?: string;
 };
 
+type ParsedRow = {
+  rowIndex: number;
+  companyName: string;
+  companyExternalId: string | null;
+  quantity: number;
+  contractType: string;
+  contractStatus: string;
+  startDate: Date | null;
+  endDate: Date | null;
+  productName: string | null;
+  amount: string | null;
+  externalId: string | null;
+  contactName: string | null;
+  contactEmail: string | null;
+  phone: string | null;
+  notes: string | null;
+};
+
 // POST /api/contracts/import
-// body: { rows: ImportRow[] }
+// body: { rows: ImportRow[], fileName?: string }
 //
-// torimatoのCSVは同一会社について「月契約」「年契約」等が別々の行として存在するため、
-// 1行 = 1契約明細（ContractLine）として取り込み、会社（Contract）単位でまとめる。
+// 方針: 「最新のtorimato CSVが現在の契約状態の正」。
+// CSVをインポートするたびに、会社ごとの契約明細(ContractLine)を今回のCSVの内容で
+// 完全に置き換える（過去のContractLineとの複雑なupsert・externalIdによる同一性判定は
+// 行わない）。そのため契約ID(externalId)がtorimatoの再エクスポートのたびに変わっても、
+// ContractLineが増殖することはない。同じCSVを3回インポートしても、3回目の
+// ContractLine件数は常に「そのCSVの行数」のままになる。
 //
-// 会社の同一性は、可能な限り会社ID（companyExternalId、torimato側の顧客ID等）で判定する。
-// 会社名だけでの突合は表記ゆれ（全角スペース・改行混入など）で同じ会社が別レコードに
-// 分裂しうるため、会社IDが無い場合のフォールバックとしてのみ使用する。
+// 会社（Contract）は従来どおり会社単位で管理する。会社IDがあれば会社IDを優先し、
+// 無ければ正規化した会社名でまとめる。会社そのもの・SupportLog・担当者・メール
+// テンプレートはCSV再インポートで削除しない（削除・置き換えの対象はContractLineのみ）。
 //
 // アカウント数の集計は「契約状態（contractStatus）」列だけを基準に行う。
 // 契約開始日・終了日は無料期間や契約切り替えの都合で実際の契約状態と一致しないことが
@@ -43,6 +65,7 @@ type ImportRow = {
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const rows: ImportRow[] = body.rows || [];
+  const fileName: string | null = typeof body.fileName === "string" ? body.fileName : null;
 
   if (!Array.isArray(rows) || rows.length === 0) {
     return NextResponse.json({ error: "取り込むデータがありません" }, { status: 400 });
@@ -52,25 +75,16 @@ export async function POST(req: NextRequest) {
   // 警告として返す（UIの事前チェックをすり抜けてPOSTされた場合の保険）。
   const warnings = [...findCompanyIdConflicts(rows), ...findLineIdConflicts(rows)];
 
-  const createdContractIds = new Set<string>();
-  const updatedContractIds = new Set<string>();
-  let linesCreated = 0;
-  let linesUpdated = 0;
   const errors: { row: number; message: string }[] = [];
+  const parsedRows: ParsedRow[] = [];
 
+  // 1. 各行を検証・パースする（この時点ではDBに書き込まない）
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const companyName = normalizeCompanyName(row.companyName || "");
-    const companyExternalId = row.companyExternalId?.trim() || null;
     const quantity = Number(row.quantity);
     const contractType = (row.contractType || "").trim();
     const contractStatus = (row.contractStatus || "").trim();
-    // 契約開始日・終了日は表示用のみ。パースできなくても行自体は取り込む。
-    const startDate = row.startDate ? parseDateOnly(row.startDate) : null;
-    const endDate = row.endDate ? parseDateOnly(row.endDate) : null;
-    // 商品名・金額も表示用・検証用のみ（集計には使用しない）
-    const productName = row.productName?.trim() || null;
-    const amount = row.amount?.trim() || null;
 
     if (!companyName) {
       errors.push({ row: i + 1, message: "会社名が空です" });
@@ -88,20 +102,65 @@ export async function POST(req: NextRequest) {
       continue;
     }
 
+    parsedRows.push({
+      rowIndex: i + 1,
+      companyName,
+      companyExternalId: row.companyExternalId?.trim() || null,
+      quantity,
+      contractType,
+      contractStatus,
+      // 契約開始日・終了日は表示用のみ。パースできなくても行自体は取り込む。
+      startDate: row.startDate ? parseDateOnly(row.startDate) : null,
+      endDate: row.endDate ? parseDateOnly(row.endDate) : null,
+      productName: row.productName?.trim() || null,
+      amount: row.amount?.trim() || null,
+      externalId: row.externalId?.trim() || null,
+      contactName: row.contactName?.trim() || null,
+      contactEmail: row.contactEmail?.trim() || null,
+      phone: row.phone?.trim() || null,
+      notes: row.notes?.trim() || null,
+    });
+  }
+
+  // 2. 会社単位でグループ化する。会社IDがあれば会社ID、無ければ正規化した会社名でまとめる。
+  const groups = new Map<string, ParsedRow[]>();
+  for (const row of parsedRows) {
+    const key = row.companyExternalId ? `id:${row.companyExternalId}` : `name:${row.companyName}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(row);
+  }
+
+  const createdContractIds = new Set<string>();
+  const updatedContractIds = new Set<string>();
+  let linesImported = 0;
+
+  // 3. 会社ごとに、Contractを作成・更新した上でContractLineを今回のCSV内容で置き換える
+  for (const [, groupRows] of groups) {
+    const companyExternalId = groupRows.find((r) => r.companyExternalId)?.companyExternalId ?? null;
+    const companyName = groupRows[0].companyName;
+
     try {
       let contract = companyExternalId
         ? await prisma.contract.findUnique({ where: { externalId: companyExternalId } })
         : await prisma.contract.findFirst({ where: { companyName } });
 
-      // 会社IDが無いままcompanyNameだけで作られた既存契約でも、今回のCSVで会社IDが
-      // 分かった場合はそれを付与しておく（次回以降はID優先で確実に突合できるようにする）
+      // 連絡先などの付随情報は、今回のCSV内でその会社に該当する行の中から
+      // 値が入っている最初のものを採用する（空欄の行で既存の値を消さないため、
+      // 値が無い項目は更新しない）。
+      const firstNonEmpty = (pick: (r: ParsedRow) => string | null) =>
+        groupRows.map(pick).find((v): v is string => !!v) ?? null;
+      const contactName = firstNonEmpty((r) => r.contactName);
+      const contactEmail = firstNonEmpty((r) => r.contactEmail);
+      const phone = firstNonEmpty((r) => r.phone);
+      const notes = firstNonEmpty((r) => r.notes);
+
       const contactPatch = {
         ...(contract && contract.companyName !== companyName ? { companyName } : {}),
         ...(companyExternalId && !contract?.externalId ? { externalId: companyExternalId } : {}),
-        ...(row.contactName?.trim() ? { contactName: row.contactName.trim() } : {}),
-        ...(row.contactEmail?.trim() ? { contactEmail: row.contactEmail.trim() } : {}),
-        ...(row.phone?.trim() ? { phone: row.phone.trim() } : {}),
-        ...(row.notes?.trim() ? { notes: row.notes.trim() } : {}),
+        ...(contactName ? { contactName } : {}),
+        ...(contactEmail ? { contactEmail } : {}),
+        ...(phone ? { phone } : {}),
+        ...(notes ? { notes } : {}),
       };
 
       if (!contract) {
@@ -109,85 +168,60 @@ export async function POST(req: NextRequest) {
           data: { companyName, externalId: companyExternalId, ...contactPatch },
         });
         createdContractIds.add(contract.id);
-      } else if (Object.keys(contactPatch).length > 0) {
-        contract = await prisma.contract.update({
-          where: { id: contract.id },
-          data: contactPatch,
-        });
-        if (!createdContractIds.has(contract.id)) {
-          updatedContractIds.add(contract.id);
-        }
-      }
-
-      // 契約明細の同一性は、まず契約ID（externalId、torimato側の行の一意キー）で判定する。
-      // ただし契約IDはtorimatoの再エクスポートのたびに値が変わることがあり、それだけに
-      // 頼ると同じ契約明細が再インポートのたびに新規作成され続けてしまう。そのため契約IDで
-      // 見つからない場合は、契約種別・商品名・契約期間（＝時間が経っても変わらないはずの
-      // 識別情報）が完全一致する既存の契約明細を探し、見つかればそれを更新する
-      // （商品名と契約期間の両方が無いと識別力が弱すぎるため、その場合はフォールバックせず
-      // 新規作成する）。
-      // 数量・契約状態・金額はこの照合キーに含めない（時間経過で正しく変わりうる値であり、
-      // 含めてしまうと"契約前→契約中"のような状態遷移のたびに別明細が重複作成されてしまう）。
-      const externalId = row.externalId?.trim() || null;
-      let existingLine = externalId
-        ? await prisma.contractLine.findUnique({ where: { externalId } })
-        : null;
-
-      if (!existingLine) {
-        const hasDates = !!(startDate && endDate);
-        const hasProduct = !!productName;
-        if (hasDates || hasProduct) {
-          existingLine = await prisma.contractLine.findFirst({
-            where: { contractId: contract.id, contractType, productName, startDate, endDate },
+      } else {
+        if (Object.keys(contactPatch).length > 0) {
+          contract = await prisma.contract.update({
+            where: { id: contract.id },
+            data: contactPatch,
           });
         }
+        updatedContractIds.add(contract.id);
       }
 
-      if (existingLine) {
-        await prisma.contractLine.update({
-          where: { id: existingLine.id },
-          data: {
-            contract: { connect: { id: contract.id } },
-            contractType,
-            contractStatus,
-            quantity,
-            startDate,
-            endDate,
-            productName,
-            amount,
-            externalId,
-          },
-        });
-        linesUpdated++;
-      } else {
-        await prisma.contractLine.create({
-          data: {
-            contract: { connect: { id: contract.id } },
-            contractType,
-            contractStatus,
-            quantity,
-            startDate,
-            endDate,
-            productName,
-            amount,
-            externalId,
-          },
-        });
-        linesCreated++;
-      }
+      // 既存のContractLineを全て削除し、今回のCSVの内容で作り直す。
+      // SupportLog・担当者・メールテンプレートはContractLineとは独立したデータのため、
+      // ここでは一切変更しない（Contract自体を削除しない限り保持される）。
+      const contractId = contract.id;
+      await prisma.$transaction([
+        prisma.contractLine.deleteMany({ where: { contractId } }),
+        prisma.contractLine.createMany({
+          data: groupRows.map((r) => ({
+            contractId,
+            contractType: r.contractType,
+            contractStatus: r.contractStatus,
+            quantity: r.quantity,
+            startDate: r.startDate,
+            endDate: r.endDate,
+            productName: r.productName,
+            amount: r.amount,
+            externalId: r.externalId,
+          })),
+        }),
+      ]);
+      linesImported += groupRows.length;
     } catch (e) {
-      errors.push({
-        row: i + 1,
-        message: e instanceof Error ? e.message : "登録に失敗しました",
-      });
+      const message = e instanceof Error ? e.message : "登録に失敗しました";
+      for (const r of groupRows) {
+        errors.push({ row: r.rowIndex, message });
+      }
     }
   }
+
+  await prisma.importBatch.create({
+    data: {
+      fileName,
+      rowCount: rows.length,
+      companyCount: groups.size,
+      successCount: rows.length - errors.length,
+      errorCount: errors.length,
+    },
+  });
 
   return NextResponse.json({
     companiesCreated: createdContractIds.size,
     companiesUpdated: updatedContractIds.size,
-    linesCreated,
-    linesUpdated,
+    linesImported,
+    companyCount: groups.size,
     errors,
     warnings,
   });
