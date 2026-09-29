@@ -113,61 +113,75 @@ export default async function ContractDetailPage({
         <p className="px-4 pt-3 text-xs text-slate-500">
           アカウント数の集計は「契約状態」列のみで判定します（契約開始日・終了日は表示用の参考情報です）。
         </p>
-        <table className="w-full text-sm">
-          <thead className="bg-slate-100 text-left text-slate-600">
-            <tr>
-              <th className="px-4 py-2">契約種別</th>
-              <th className="px-4 py-2">商品名</th>
-              <th className="px-4 py-2">数量</th>
-              <th className="px-4 py-2">契約状態</th>
-              <th className="px-4 py-2">契約開始日</th>
-              <th className="px-4 py-2">契約終了日</th>
-              <th className="px-4 py-2">金額</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {contract.contractLines.length === 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-100 text-left text-slate-600">
               <tr>
-                <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
-                  契約明細がまだありません。CSVインポートで取り込んでください。
-                </td>
+                <th className="px-4 py-2">商品名</th>
+                <th className="px-4 py-2">数量</th>
+                <th className="px-4 py-2">金額</th>
+                <th className="px-4 py-2">契約タイプ</th>
+                <th className="px-4 py-2">契約状態</th>
+                <th className="px-4 py-2">契約開始日</th>
+                <th className="px-4 py-2">契約終了日</th>
+                <th className="px-4 py-2">申込日</th>
+                <th className="px-4 py-2">代理店</th>
+                <th className="px-4 py-2">請求方法</th>
+                <th className="px-4 py-2">キー発行状況</th>
               </tr>
-            )}
-            {contract.contractLines.map((line) => {
-              const active = line.contractStatus === ACTIVE_CONTRACT_STATUS;
-              return (
-                <tr key={line.id}>
-                  <td className="px-4 py-2">{line.contractType || "-"}</td>
-                  <td className="px-4 py-2">{line.productName || "-"}</td>
-                  <td className="px-4 py-2">{line.quantity}</td>
-                  <td className="px-4 py-2">
-                    {line.contractStatus ? (
-                      <span
-                        className={
-                          active
-                            ? "badge bg-emerald-100 text-emerald-800"
-                            : "badge bg-slate-100 text-slate-600"
-                        }
-                      >
-                        {line.contractStatus}
-                        {active ? "（集計対象）" : ""}
-                      </span>
-                    ) : (
-                      <span className="badge bg-slate-100 text-slate-400">未設定</span>
-                    )}
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {contract.contractLines.length === 0 && (
+                <tr>
+                  <td colSpan={11} className="px-4 py-6 text-center text-slate-500">
+                    契約明細がまだありません。CSVインポートで取り込んでください。
                   </td>
-                  <td className="px-4 py-2 text-slate-500">
-                    {line.startDate ? new Date(line.startDate).toLocaleDateString("ja-JP") : "-"}
-                  </td>
-                  <td className="px-4 py-2 text-slate-500">
-                    {line.endDate ? new Date(line.endDate).toLocaleDateString("ja-JP") : "-"}
-                  </td>
-                  <td className="px-4 py-2 text-slate-500">{line.amount || "-"}</td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              )}
+              {contract.contractLines.map((line) => {
+                const active = line.contractStatus === ACTIVE_CONTRACT_STATUS;
+                return (
+                  <tr key={line.id}>
+                    <td className="px-4 py-2">{line.productName || "-"}</td>
+                    <td className="px-4 py-2">{line.quantity}</td>
+                    <td className="px-4 py-2 text-slate-500">{line.amount || "-"}</td>
+                    <td className="px-4 py-2">{line.contractType || "-"}</td>
+                    <td className="px-4 py-2">
+                      {line.contractStatus ? (
+                        <span
+                          className={
+                            active
+                              ? "badge bg-emerald-100 text-emerald-800"
+                              : "badge bg-slate-100 text-slate-600"
+                          }
+                        >
+                          {line.contractStatus}
+                          {active ? "（集計対象）" : ""}
+                        </span>
+                      ) : (
+                        <span className="badge bg-slate-100 text-slate-400">未設定</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-slate-500">
+                      {line.startDate ? new Date(line.startDate).toLocaleDateString("ja-JP") : "-"}
+                    </td>
+                    <td className="px-4 py-2 text-slate-500">
+                      {line.endDate ? new Date(line.endDate).toLocaleDateString("ja-JP") : "-"}
+                    </td>
+                    <td className="px-4 py-2 text-slate-500">
+                      {line.applicationDate
+                        ? new Date(line.applicationDate).toLocaleDateString("ja-JP")
+                        : "-"}
+                    </td>
+                    <td className="px-4 py-2 text-slate-500">{line.agencyName || "-"}</td>
+                    <td className="px-4 py-2 text-slate-500">{line.billingMethod || "-"}</td>
+                    <td className="px-4 py-2 text-slate-500">{line.keyIssuedStatus || "-"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="card">

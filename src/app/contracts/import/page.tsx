@@ -15,6 +15,10 @@ type FieldKey =
   | "endDate"
   | "productName"
   | "amount"
+  | "applicationDate"
+  | "agencyName"
+  | "billingMethod"
+  | "keyIssuedStatus"
   | "externalId"
   | "contactName"
   | "contactEmail"
@@ -27,9 +31,10 @@ const FIELDS: { key: FieldKey; label: string; required?: boolean; hint?: string 
     key: "companyExternalId",
     label: "会社ID（顧客ID）",
     hint:
-      "自動推測はしません。必ずCSVの中身を確認し、同じ会社の全ての行で共通の値になっている列を選んでください。" +
-      "契約ID・行番号など行ごとに異なる値の列を選ぶと、同じ会社が複数の契約先に分裂します。" +
-      "確信が持てない場合は空欄のままにしてください（会社名で判定します）。",
+      "「顧客ID」等、明確に一致する列名がある場合のみ自動マッピングします。" +
+      "自動マッピングされた場合も含め、必ずCSVの中身を確認し、同じ会社の全ての行で共通の値に" +
+      "なっている列であることを確認してください。契約ID・行番号など行ごとに異なる値の列を選ぶと、" +
+      "同じ会社が複数の契約先に分裂します。確信が持てない場合は空欄のままにしてください（会社名で判定します）。",
   },
   { key: "quantity", label: "数量（アカウント数）", required: true },
   {
@@ -60,12 +65,25 @@ const FIELDS: { key: FieldKey; label: string; required?: boolean; hint?: string 
       "表示用・整合性チェック用（例:「【年間プラン】」「【月額プラン】」等の表記と契約種別の不一致検出に使用）。" +
       "CSVの「サービス名」列を自動認識します",
   },
-  { key: "amount", label: "金額", hint: "表示用のみ（集計には使用しません）" },
+  { key: "amount", label: "金額", hint: "表示用のみ（集計には使用しません）。「金額(税込)」等の列も自動認識します" },
+  {
+    key: "applicationDate",
+    label: "申込日",
+    hint: "表示用のみ（集計には使用しません）",
+  },
+  { key: "agencyName", label: "代理店", hint: "表示用のみ" },
+  { key: "billingMethod", label: "請求方法", hint: "表示用のみ" },
+  {
+    key: "keyIssuedStatus",
+    label: "キー発行状況",
+    hint: "表示用のみ。「済」「未」等の表記へ自動的に正規化して保存します（判定できない場合はCSVの値をそのまま保持）",
+  },
   {
     key: "externalId",
     label: "契約ID（契約明細1行の一意キー・表示用）",
     hint:
-      "自動推測はしません。この契約明細行だけを指す値（行ごとに異なるのが正しい状態）の列を選んでください。" +
+      "「契約ID」等、明確に一致する列名がある場合のみ自動マッピングします。" +
+      "この契約明細行だけを指す値（行ごとに異なるのが正しい状態）の列を選んでください。" +
       "会社ID・顧客IDなど複数行で共通になる列を選ばないでください。" +
       "インポートのたびに契約明細は今回のCSV内容で置き換わるため、再インポート時の同一性判定には使用しません（表示用のみ）。",
   },
@@ -75,8 +93,10 @@ const FIELDS: { key: FieldKey; label: string; required?: boolean; hint?: string 
   { key: "notes", label: "備考" },
 ];
 
-// 会社ID(companyExternalId)・契約ID(externalId)は、間違った列を選ぶと
-// 会社の分裂や契約明細の誤結合につながるため、自動推測は行わず必ず人が選ぶ。
+// 会社ID(companyExternalId)・契約ID(externalId)は、間違った列を選ぶと会社の分裂や
+// 契約明細の誤結合につながるため、他の項目のような部分一致（includes）での推測は行わない。
+// 代わりに、torimatoの実際の列名として明確に分かっているもの（EXACT_GUESS）に
+// 完全一致する列名がある場合のみ、その列を自動マッピングする。
 const GUESS: Record<FieldKey, string[]> = {
   companyName: ["会社名", "契約先名", "顧客名", "企業名", "会社", "company", "name"],
   companyExternalId: [],
@@ -87,6 +107,10 @@ const GUESS: Record<FieldKey, string[]> = {
   endDate: ["契約終了日", "終了日", "契約期間（終了", "契約期間(終了", "終了", "end"],
   productName: ["サービス名", "商品名", "プラン名", "service", "product"],
   amount: ["金額", "料金", "価格", "amount", "price"],
+  applicationDate: ["申込日", "申込", "application"],
+  agencyName: ["代理店", "agency"],
+  billingMethod: ["請求方法", "請求", "billing"],
+  keyIssuedStatus: ["キー発行済み", "キー発行", "key"],
   externalId: [],
   contactName: ["担当者", "担当者名", "ご担当者", "contact"],
   contactEmail: ["メールアドレス", "メール", "email", "mail"],
@@ -94,12 +118,24 @@ const GUESS: Record<FieldKey, string[]> = {
   notes: ["備考", "メモ", "note", "notes"],
 };
 
+// companyExternalId・externalIdは部分一致では推測せず、ここに列挙した列名と
+// 完全一致（前後の空白・大文字小文字の違いのみ吸収）する場合だけ自動マッピングする。
+const EXACT_GUESS: Partial<Record<FieldKey, string[]>> = {
+  companyExternalId: ["顧客ID", "顧客CD", "会社ID", "取引先ID", "取引先コード"],
+  externalId: ["契約ID", "契約番号", "明細ID"],
+};
+
 function guessMapping(headers: string[]) {
   const mapping: Partial<Record<FieldKey, string>> = {};
   for (const field of FIELDS) {
-    const hit = headers.find((h) =>
-      GUESS[field.key].some((g) => h.toLowerCase().includes(g.toLowerCase()))
-    );
+    const exactCandidates = EXACT_GUESS[field.key];
+    const hit = exactCandidates
+      ? headers.find((h) =>
+          exactCandidates.some((g) => h.trim().toLowerCase() === g.trim().toLowerCase())
+        )
+      : headers.find((h) =>
+          GUESS[field.key].some((g) => h.toLowerCase().includes(g.toLowerCase()))
+        );
     if (hit) mapping[field.key] = hit;
   }
   return mapping;
@@ -156,6 +192,14 @@ export default function ImportPage() {
     });
   }, [rows, mapping]);
 
+  // CSVにはあるが、どのシステム項目にもマッピングされていない列（「未使用列」）。
+  // torimatoのCSVに新しい列が増えた場合や、まだこのシステムで使っていない項目に
+  // 気付けるようにするための一覧表示に使う。
+  const unusedHeaders = useMemo(() => {
+    const mappedHeaders = new Set(Object.values(mapping).filter((v): v is string => !!v));
+    return headers.filter((h) => !mappedHeaders.has(h));
+  }, [headers, mapping]);
+
   // 会社ID・契約IDの列マッピングが間違っている疑いを、取り込み前にCSV全行から検出する。
   // 例: 契約ID列を会社IDに誤ってマッピングすると、同じ会社名なのに会社IDが行ごとに
   // バラバラになり、同じ会社が複数のContractに分裂する原因になる。
@@ -210,6 +254,11 @@ export default function ImportPage() {
         会社名だけの判定は表記ゆれ（全角/半角スペースの違いなど）で同じ会社が別の契約先として
         重複登録されてしまうことがあるため、torimato側に顧客ID等の列があれば
         必ずマッピングしてください。
+      </p>
+      <p className="text-sm text-slate-500">
+        サービス名・契約タイプ・契約状態・金額・契約期間（開始/終了）に加え、申込日・代理店・
+        請求方法・キー発行状況もあわせて取り込み、契約詳細画面で確認できます。
+        これらはいずれも表示用の参考情報で、アカウント数・サポートプランの集計には使用しません。
       </p>
       <p className="text-sm text-slate-500">
         <strong>「最新のCSVが現在の契約状態の正」</strong>という方針のため、会社ごとの契約明細は
@@ -284,6 +333,25 @@ export default function ImportPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {headers.length > 0 && unusedHeaders.length > 0 && (
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+            <p className="font-semibold text-slate-700">
+              未使用列（{unusedHeaders.length}件）
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              CSVにはあるものの、現在どのシステム項目にもマッピングされていない列です。
+              このシステムでまだ使っていない項目や、マッピングし忘れがないか確認できます。
+            </p>
+            <ul className="mt-2 flex flex-wrap gap-2">
+              {unusedHeaders.map((h) => (
+                <li key={h} className="badge bg-slate-200 text-slate-600">
+                  {h}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 

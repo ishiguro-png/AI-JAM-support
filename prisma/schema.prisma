@@ -12,17 +12,17 @@ datasource db {
 // torimatoのCSVが持つContractLine.contractStatus（契約中/契約前/解約）とは完全に別物。
 // CSVインポートからstatusへ値を書き込むことはない。
 model Contract {
-  id           String    @id @default(cuid())
+  id           String   @id @default(cuid())
   companyName  String
-  externalId   String?   @unique // torimato側の会社・顧客ID。CSVにあれば会社名より優先して同一会社の判定に使う
+  externalId   String?  @unique // torimato側の会社・顧客ID。CSVにあれば会社名より優先して同一会社の判定に使う
   contactName  String?
   contactEmail String?
   phone        String?
-  status       String    @default("active") // active | cancelled | paused（アプリ内でのみ編集）
+  status       String   @default("active") // active | cancelled | paused（アプリ内でのみ編集）
   notes        String?
-  importedAt   DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  createdAt    DateTime  @default(now())
+  importedAt   DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
 
   contractLines ContractLine[]
   supportLogs   SupportLog[]
@@ -38,19 +38,23 @@ model Contract {
 // 契約開始日・終了日は無料期間や契約切り替えの都合で実態と一致しないことがあるため、
 // 表示用データとしてのみ保持し、集計判定には一切使用しない。
 model ContractLine {
-  id             String   @id @default(cuid())
-  contractId     String
-  contract       Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  contractType   String // 例: "月契約" | "年契約"（torimatoのCSV表記をそのまま保持、表示用）
-  contractStatus String? // 例: "契約中" | "契約前" | "解約"（アカウント数集計の判定に使用）
-  quantity       Int
-  startDate      DateTime? // 表示用のみ。集計には使用しない
-  endDate        DateTime? // 表示用のみ。集計には使用しない
-  productName    String? // 商品名（表示用・検証用。CSVの表記をそのまま保持）
-  amount         String? // 金額（表示用・検証用。書式（カンマ・通貨記号）を保持するため文字列で保存）
-  externalId     String?  @unique // torimato側の行の一意キー（表示用のみ。再インポート時の同一性判定には使用しない）
-  importedAt     DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id              String    @id @default(cuid())
+  contractId      String
+  contract        Contract  @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  contractType    String // 例: "月契約" | "年契約"（torimatoのCSV表記をそのまま保持、表示用）
+  contractStatus  String? // 例: "契約中" | "契約前" | "解約"（アカウント数集計の判定に使用）
+  quantity        Int
+  startDate       DateTime? // 表示用のみ。集計には使用しない
+  endDate         DateTime? // 表示用のみ。集計には使用しない
+  productName     String? // 商品名/サービス名（表示用・検証用。CSVの表記をそのまま保持）
+  amount          String? // 金額（表示用・検証用。書式（カンマ・通貨記号）を保持するため文字列で保存）
+  applicationDate DateTime? // 申込日（表示用のみ。集計には使用しない）
+  agencyName      String? // 代理店（表示用。CSVの表記をそのまま保持）
+  billingMethod   String? // 請求方法（表示用。CSVの表記をそのまま保持）
+  keyIssuedStatus String? // キー発行状況。"済" | "未" に正規化して保持（判定できない場合はCSVの値をそのまま保持）
+  externalId      String?   @unique // torimato側の行の一意キー（表示用のみ。再インポート時の同一性判定には使用しない）
+  importedAt      DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@index([contractId])
   @@index([contractStatus])

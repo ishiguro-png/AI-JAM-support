@@ -53,3 +53,18 @@ export function parseDateOnly(input: string): Date | null {
 // 一致しているかの検証に使う。npm run verify から利用する。
 export const YEARLY_PLAN_TAG = "【年間プラン】";
 export const MONTHLY_PLAN_TAG = "【月額プラン】";
+
+// キー発行状況（CSVの「キー発行済み」列）を "済" / "未" に正規化する。
+// torimatoの表記ゆれ（済/未発行、○/×、TRUE/FALSE等）をできるだけ吸収するが、
+// どちらとも判断できない場合は元の文字列をそのまま保持する（＝情報を失わない）。
+const ISSUED_PATTERNS = ["済", "発行済", "○", "レ", "true", "yes", "y", "1"];
+const NOT_ISSUED_PATTERNS = ["未", "未発行", "×", "false", "no", "n", "0"];
+
+export function normalizeKeyIssuedStatus(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return trimmed;
+  const lower = trimmed.toLowerCase();
+  if (ISSUED_PATTERNS.some((p) => lower === p.toLowerCase())) return "済";
+  if (NOT_ISSUED_PATTERNS.some((p) => lower === p.toLowerCase())) return "未";
+  return trimmed;
+}

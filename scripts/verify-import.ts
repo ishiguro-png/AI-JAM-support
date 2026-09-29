@@ -9,10 +9,14 @@
 // 確認する項目:
 //   1. 同一会社名（表記ゆれ正規化後）が複数のContractに分裂していないか
 //   2. accountCount（画面表示値）が「契約中」の契約明細のquantity合計と一致するか
-//      （アプリのロジックとは別に、このスクリプト内で独立に再計算してクロスチェックする）
-//   3. contractStatusが未設定(null)の契約明細がないか（集計から漏れていないか確認するため）
-//   4. 契約ID（externalId）がContractLine間で重複していないか（表示用フィールドのみだが、
+//      （アプリのロジックとは別に、このスクリプト内で独立に再計算してクロスチェックする）。
+//      あわせてcontractStatusが未設定(null)の契約明細がないかも確認する
+//   3. 契約ID（externalId）がContractLine間で重複していないか（表示用フィールドのみだが、
 //      DBのユニーク制約による取り込みエラーの原因になりうるため確認する）
+//   4. 主要項目（productName・contractType・contractStatus・amount・quantity・
+//      startDate/endDate・applicationDate・agencyName・billingMethod・
+//      keyIssuedStatus）ごとの未設定件数。CSVの主要列がほぼ全件保存されているか、
+//      インポート画面での列マッピング漏れがないかを確認する
 //   5. 契約種別（contractType）の集計・商品名との整合性
 //      - 年契約/月契約/未設定それぞれの件数
 //      - 商品名が「【年間プラン】」なのにcontractTypeが「月契約」になっている件数
@@ -145,6 +149,53 @@ async function main() {
   } else {
     hasProblem = true;
     console.log(`[NG] 重複している契約ID: ${dupIds.map((d) => d.externalId).join(", ")}`);
+  }
+  console.log("");
+
+  // 4. 主要項目のマッピング網羅率チェック: CSVの主要列がほぼ全件保存されているかを確認する。
+  //    未設定件数が多い場合、インポート画面でその列がマッピングされていない可能性が高い。
+  const allLines = contracts.flatMap((c) => c.contractLines);
+  const isUnset = (v: unknown) => v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+  const coreFields: { key: string; label: string; unsetCount: number }[] = [
+    { key: "productName", label: "productName（商品名/サービス名）", unsetCount: allLines.filter((l) => isUnset(l.productName)).length },
+    { key: "contractType", label: "contractType（契約タイプ）", unsetCount: allLines.filter((l) => isUnset(l.contractType)).length },
+    { key: "contractStatus", label: "contractStatus（契約状態）", unsetCount: allLines.filter((l) => isUnset(l.contractStatus)).length },
+    { key: "amount", label: "amount（金額）", unsetCount: allLines.filter((l) => isUnset(l.amount)).length },
+  ];
+  const optionalFields: { key: string; label: string; unsetCount: number }[] = [
+    { key: "startDate", label: "startDate（契約開始日）", unsetCount: allLines.filter((l) => isUnset(l.startDate)).length },
+    { key: "endDate", label: "endDate（契約終了日）", unsetCount: allLines.filter((l) => isUnset(l.endDate)).length },
+    { key: "applicationDate", label: "applicationDate（申込日）", unsetCount: allLines.filter((l) => isUnset(l.applicationDate)).length },
+    { key: "agencyName", label: "agencyName（代理店）", unsetCount: allLines.filter((l) => isUnset(l.agencyName)).length },
+    { key: "billingMethod", label: "billingMethod（請求方法）", unsetCount: allLines.filter((l) => isUnset(l.billingMethod)).length },
+    { key: "keyIssuedStatus", label: "keyIssuedStatus（キー発行状況）", unsetCount: allLines.filter((l) => isUnset(l.keyIssuedStatus)).length },
+  ];
+  const invalidQuantityCount = allLines.filter((l) => !Number.isFinite(l.quantity) || l.quantity < 0).length;
+
+  console.log("=== 主要項目のマッピング網羅率（未設定件数） ===");
+  for (const { label, unsetCount } of [...coreFields, ...optionalFields]) {
+    const ratio = totalLines > 0 ? Math.round((unsetCount / totalLines) * 100) : 0;
+    console.log(`  ${label}: 未設定 ${unsetCount}件 / 全${totalLines}件（${ratio}%）`);
+  }
+  console.log(`  quantity（数量）が不正な件数: ${invalidQuantityCount}件`);
+  console.log("");
+
+  const coreUnmapped = coreFields.filter(
+    (f) => totalLines > 0 && f.unsetCount / totalLines >= 0.5
+  );
+  if (coreUnmapped.length === 0 && invalidQuantityCount === 0) {
+    console.log("[OK] 主要項目（商品名・契約タイプ・契約状態・金額・数量）の未設定率は50%未満です。");
+  } else {
+    hasProblem = true;
+    if (coreUnmapped.length > 0) {
+      console.log(
+        `[NG] 未設定率が50%以上の主要項目があります: ${coreUnmapped.map((f) => f.label).join(", ")}。` +
+          "CSVインポート画面でこれらの列がマッピングされているか確認してください。"
+      );
+    }
+    if (invalidQuantityCount > 0) {
+      console.log(`[NG] 数量(quantity)が不正な契約明細が ${invalidQuantityCount} 件あります。`);
+    }
   }
   console.log("");
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { parseDateOnly } from "@/lib/contractLines";
+import { normalizeKeyIssuedStatus, parseDateOnly } from "@/lib/contractLines";
 import {
   normalizeCompanyName,
   findCompanyIdConflicts,
@@ -17,6 +17,10 @@ type ImportRow = {
   endDate?: string;
   productName?: string;
   amount?: string;
+  applicationDate?: string;
+  agencyName?: string;
+  billingMethod?: string;
+  keyIssuedStatus?: string;
   contactName?: string;
   contactEmail?: string;
   phone?: string;
@@ -35,6 +39,10 @@ type ParsedRow = {
   endDate: Date | null;
   productName: string | null;
   amount: string | null;
+  applicationDate: Date | null;
+  agencyName: string | null;
+  billingMethod: string | null;
+  keyIssuedStatus: string | null;
   externalId: string | null;
   contactName: string | null;
   contactEmail: string | null;
@@ -109,11 +117,17 @@ export async function POST(req: NextRequest) {
       quantity,
       contractType,
       contractStatus,
-      // 契約開始日・終了日は表示用のみ。パースできなくても行自体は取り込む。
+      // 契約開始日・終了日・申込日は表示用のみ。パースできなくても行自体は取り込む。
       startDate: row.startDate ? parseDateOnly(row.startDate) : null,
       endDate: row.endDate ? parseDateOnly(row.endDate) : null,
       productName: row.productName?.trim() || null,
       amount: row.amount?.trim() || null,
+      applicationDate: row.applicationDate ? parseDateOnly(row.applicationDate) : null,
+      agencyName: row.agencyName?.trim() || null,
+      billingMethod: row.billingMethod?.trim() || null,
+      keyIssuedStatus: row.keyIssuedStatus?.trim()
+        ? normalizeKeyIssuedStatus(row.keyIssuedStatus)
+        : null,
       externalId: row.externalId?.trim() || null,
       contactName: row.contactName?.trim() || null,
       contactEmail: row.contactEmail?.trim() || null,
@@ -194,6 +208,10 @@ export async function POST(req: NextRequest) {
             endDate: r.endDate,
             productName: r.productName,
             amount: r.amount,
+            applicationDate: r.applicationDate,
+            agencyName: r.agencyName,
+            billingMethod: r.billingMethod,
+            keyIssuedStatus: r.keyIssuedStatus,
             externalId: r.externalId,
           })),
         }),
