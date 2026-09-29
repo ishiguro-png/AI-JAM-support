@@ -38,13 +38,27 @@ const FIELDS: { key: FieldKey; label: string; required?: boolean; hint?: string 
     required: true,
     hint: "アカウント数の集計・サポートプラン判定はこの列だけで行います",
   },
-  { key: "contractType", label: "契約種別（月契約/年契約）", hint: "表示用" },
-  { key: "startDate", label: "契約開始日", hint: "表示用（集計には使用しません）" },
-  { key: "endDate", label: "契約終了日", hint: "表示用（集計には使用しません）" },
+  {
+    key: "contractType",
+    label: "契約種別（月契約/年契約）",
+    hint: "表示用。CSVの「契約タイプ」「契約種別」列を自動認識します",
+  },
+  {
+    key: "startDate",
+    label: "契約開始日",
+    hint: "表示用（集計には使用しません）。「契約期間（開始）」等の列も自動認識します",
+  },
+  {
+    key: "endDate",
+    label: "契約終了日",
+    hint: "表示用（集計には使用しません）。「契約期間（終了）」等の列も自動認識します",
+  },
   {
     key: "productName",
-    label: "商品名",
-    hint: "表示用・整合性チェック用（例:「【年間プラン】」「【月額プラン】」等の表記と契約種別の不一致検出に使用）",
+    label: "商品名（サービス名）",
+    hint:
+      "表示用・整合性チェック用（例:「【年間プラン】」「【月額プラン】」等の表記と契約種別の不一致検出に使用）。" +
+      "CSVの「サービス名」列を自動認識します",
   },
   { key: "amount", label: "金額", hint: "表示用のみ（集計には使用しません）" },
   {
@@ -68,10 +82,10 @@ const GUESS: Record<FieldKey, string[]> = {
   companyExternalId: [],
   quantity: ["数量", "個数", "アカウント数", "口座数", "quantity", "qty"],
   contractStatus: ["契約状態", "契約ステータス", "契約状況", "contract status", "contractstatus"],
-  contractType: ["契約種別", "種別", "契約タイプ", "プラン種別", "type"],
-  startDate: ["契約開始日", "開始日", "start"],
-  endDate: ["契約終了日", "終了日", "end"],
-  productName: ["商品名", "プラン名", "product"],
+  contractType: ["契約タイプ", "契約種別", "種別", "プラン種別", "type"],
+  startDate: ["契約開始日", "開始日", "契約期間（開始", "契約期間(開始", "開始", "start"],
+  endDate: ["契約終了日", "終了日", "契約期間（終了", "契約期間(終了", "終了", "end"],
+  productName: ["サービス名", "商品名", "プラン名", "service", "product"],
   amount: ["金額", "料金", "価格", "amount", "price"],
   externalId: [],
   contactName: ["担当者", "担当者名", "ご担当者", "contact"],
