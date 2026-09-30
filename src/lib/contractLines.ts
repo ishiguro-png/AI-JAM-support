@@ -1,22 +1,34 @@
-// 契約明細（月契約/年契約などの行）から「現在有効なアカウント数」を集計するためのユーティリティ。
+// 契約明細（月契約/年契約などの行）から「現在のアカウント数」を集計するためのユーティリティ。
 //
 // torimatoのCSVに入っている契約開始日・契約終了日は、無料期間や契約切り替えの都合で
-// 実際の契約状態と一致しないことがあるため、有効契約かどうかの判定には使用しない。
-// 代わりにCSVの「契約状態」列（契約中 / 契約前 / 解約）だけを基準に判定する。
-// 開始日・終了日は契約詳細画面などの表示用データとしてのみ保持する。
-
+// 実際の契約状態と一致しないことがあるため、集計対象かどうかの判定には使用しない。
+// 代わりにCSVの「契約状態」列だけを基準に判定する（契約期間の日付から契約前・契約中を
+// 推測することはしない）。開始日・終了日は契約詳細画面などの表示用データとしてのみ保持する。
+//
+// 集計ルール:
+//   - 契約中 → カウントする
+//   - 契約前 → カウントする（まだ開始していないが有効な契約のため）
+//   - 解約・解約済み等、終了した契約 → カウントしない
 export const ACTIVE_CONTRACT_STATUS = "契約中";
+export const PENDING_CONTRACT_STATUS = "契約前";
+// アカウント数の集計対象に含める契約状態の一覧。この配列に無い値（解約・解約済み・
+// 未設定など）は全てカウント対象外になる。
+export const ACCOUNT_COUNTABLE_STATUSES: readonly string[] = [
+  ACTIVE_CONTRACT_STATUS,
+  PENDING_CONTRACT_STATUS,
+];
 
 export type ContractLineLike = {
   quantity: number;
   contractStatus: string | null;
 };
 
+// このContractLineがアカウント数の集計対象かどうか（契約中 または 契約前）。
 export function isLineActive(line: ContractLineLike): boolean {
-  return (line.contractStatus ?? "").trim() === ACTIVE_CONTRACT_STATUS;
+  return ACCOUNT_COUNTABLE_STATUSES.includes((line.contractStatus ?? "").trim());
 }
 
-// 会社単位で、契約状態が「契約中」の契約行だけのquantityを合算する
+// 会社単位で、集計対象（契約中・契約前）の契約行だけのquantityを合算する
 export function computeActiveAccountCount(lines: ContractLineLike[]): number {
   return lines.filter(isLineActive).reduce((sum, line) => sum + line.quantity, 0);
 }

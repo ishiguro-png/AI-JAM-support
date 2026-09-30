@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { PLAN_TIERS, PLAN_TIER_SHORT_LABELS, computePlanTier } from "@/lib/planTier";
-import { ACTIVE_CONTRACT_STATUS, computeActiveAccountCount } from "@/lib/contractLines";
+import { computeActiveAccountCount, isLineActive } from "@/lib/contractLines";
 import { PlanBadge } from "@/components/PlanBadge";
 
 export const dynamic = "force-dynamic";
@@ -51,9 +51,7 @@ export default async function ContractsPage({
   // 表示し、個々の契約明細のcontractStatusをそのまま会社のステータスとして出さないようにする。
   const withComputed = contracts.map(({ contractLines, ...c }) => {
     const accountCount = computeActiveAccountCount(contractLines);
-    const activeLineCount = contractLines.filter(
-      (l) => l.contractStatus === ACTIVE_CONTRACT_STATUS
-    ).length;
+    const activeLineCount = contractLines.filter(isLineActive).length;
     return {
       ...c,
       accountCount,

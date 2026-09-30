@@ -8,9 +8,10 @@
 //
 // 確認する項目:
 //   1. 同一会社名（表記ゆれ正規化後）が複数のContractに分裂していないか
-//   2. accountCount（画面表示値）が「契約中」の契約明細のquantity合計と一致するか
-//      （アプリのロジックとは別に、このスクリプト内で独立に再計算してクロスチェックする）。
-//      あわせてcontractStatusが未設定(null)の契約明細がないかも確認する
+//   2. accountCount（画面表示値）が「契約中」「契約前」の契約明細のquantity合計と
+//      一致するか（アプリのロジックとは別に、このスクリプト内で独立に再計算して
+//      クロスチェックする。解約・解約済み等は集計対象外）。あわせてcontractStatusが
+//      未設定(null)の契約明細がないかも確認する
 //   3. 契約ID（externalId）がContractLine間で重複していないか（表示用フィールドのみだが、
 //      DBのユニーク制約による取り込みエラーの原因になりうるため確認する）
 //   4. 主要項目（productName・contractType・contractStatus・amount・quantity・
@@ -27,9 +28,15 @@
 // （インポート履歴はImportBatchテーブルにも記録される。下記の最新インポート履歴を参照）。
 
 import { PrismaClient } from "@prisma/client";
-import { ACTIVE_CONTRACT_STATUS, computeActiveAccountCount } from "../src/lib/contractLines";
+import { computeActiveAccountCount, isLineActive } from "../src/lib/contractLines";
 import { normalizeCompanyName } from "../src/lib/csvImportChecks";
 import { computePlanTier } from "../src/lib/planTier";
+
+// アプリ本体（src/lib/contractLines.ts）のロジックとは別に、このスクリプト内で
+// 独立にaccountCountを再計算するための集計ルール。同じ定数・関数を使い回すと
+// アプリ側のロジック自体にバグがあった場合に気付けなくなるため、あえて
+// 「契約中」「契約前」をハードコードして独立に判定する。
+const ACCOUNT_COUNTABLE_STATUSES_INDEPENDENT = ["契約中", "契約前"];
 
 const prisma = new PrismaClient();
 
@@ -115,7 +122,7 @@ async function main() {
   for (const c of contracts) {
     const appComputed = computeActiveAccountCount(c.contractLines);
     const manualSum = c.contractLines
-      .filter((l) => l.contractStatus === ACTIVE_CONTRACT_STATUS)
+      .filter((l) => ACCOUNT_COUNTABLE_STATUSES_INDEPENDENT.includes((l.contractStatus || "").trim()))
       .reduce((sum, l) => sum + l.quantity, 0);
     if (appComputed !== manualSum) {
       hasProblem = true;
@@ -127,7 +134,7 @@ async function main() {
     nullStatusLineCount += c.contractLines.filter((l) => !l.contractStatus).length;
   }
   if (mismatchCount === 0) {
-    console.log("[OK] 全社でaccountCountは「契約中」明細のquantity合計と一致しています。");
+    console.log("[OK] 全社でaccountCountは「契約中」「契約前」明細のquantity合計と一致しています。");
   }
   if (nullStatusLineCount > 0) {
     console.log(
@@ -269,10 +276,10 @@ async function main() {
   console.log("=== 会社別サマリ ===");
   for (const c of contracts) {
     const accountCount = computeActiveAccountCount(c.contractLines);
-    const activeLines = c.contractLines.filter((l) => l.contractStatus === ACTIVE_CONTRACT_STATUS).length;
+    const activeLines = c.contractLines.filter(isLineActive).length;
     console.log(
       `${c.companyName} | accountCount=${accountCount} | plan=${computePlanTier(accountCount) ?? "対象外"} | ` +
-        `契約明細=${c.contractLines.length}件（契約中=${activeLines}件）`
+        `契約明細=${c.contractLines.length}件（集計対象(契約中+契約前)=${activeLines}件）`
     );
   }
 

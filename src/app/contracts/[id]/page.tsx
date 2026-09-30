@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { computePlanTier } from "@/lib/planTier";
-import { ACTIVE_CONTRACT_STATUS, computeActiveAccountCount } from "@/lib/contractLines";
+import { computeActiveAccountCount, isLineActive } from "@/lib/contractLines";
 import { PlanBadge } from "@/components/PlanBadge";
 import { AddLogForm } from "@/components/AddLogForm";
 import { SendEmailForm } from "@/components/SendEmailForm";
@@ -111,7 +111,8 @@ export default async function ContractDetailPage({
           契約明細（{contract.contractLines.length}件）
         </div>
         <p className="px-4 pt-3 text-xs text-slate-500">
-          アカウント数の集計は「契約状態」列のみで判定します（契約開始日・終了日は表示用の参考情報です）。
+          アカウント数の集計は「契約状態」列のみで判定します（契約中・契約前が集計対象、解約・解約済み等は対象外。
+          契約開始日・終了日は表示用の参考情報です）。
         </p>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -139,7 +140,7 @@ export default async function ContractDetailPage({
                 </tr>
               )}
               {contract.contractLines.map((line) => {
-                const active = line.contractStatus === ACTIVE_CONTRACT_STATUS;
+                const active = isLineActive(line);
                 return (
                   <tr key={line.id}>
                     <td className="px-4 py-2">{line.productName || "-"}</td>

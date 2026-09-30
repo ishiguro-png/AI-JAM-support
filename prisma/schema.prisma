@@ -34,7 +34,8 @@ model Contract {
 // 「最新のtorimato CSVが現在の契約状態の正」という方針のため、CSVインポートのたびに
 // その会社のContractLineは全件削除してCSVの内容で作り直す（過去のCSVとの突合・
 // upsertは行わない）。そのため契約IDが再エクスポートのたびに変わっても増殖しない。
-// 会社単位のアカウント数は「contractStatus = 契約中」の行のquantityを合算して算出する。
+// 会社単位のアカウント数は「contractStatus が 契約中 または 契約前」の行のquantityを
+// 合算して算出する（解約・解約済み等は対象外。詳細はsrc/lib/contractLines.ts参照）。
 // 契約開始日・終了日は無料期間や契約切り替えの都合で実態と一致しないことがあるため、
 // 表示用データとしてのみ保持し、集計判定には一切使用しない。
 model ContractLine {
@@ -42,7 +43,7 @@ model ContractLine {
   contractId      String
   contract        Contract  @relation(fields: [contractId], references: [id], onDelete: Cascade)
   contractType    String // 例: "月契約" | "年契約"（torimatoのCSV表記をそのまま保持、表示用）
-  contractStatus  String? // 例: "契約中" | "契約前" | "解約"（アカウント数集計の判定に使用）
+  contractStatus  String? // 例: "契約中" | "契約前" | "解約"（契約中・契約前がアカウント数集計の対象）
   quantity        Int
   startDate       DateTime? // 表示用のみ。集計には使用しない
   endDate         DateTime? // 表示用のみ。集計には使用しない
