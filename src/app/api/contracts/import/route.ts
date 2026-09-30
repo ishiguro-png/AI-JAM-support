@@ -94,11 +94,33 @@ export async function POST(req: NextRequest) {
   const errors: { row: number; message: string }[] = [];
   const parsedRows: ParsedRow[] = [];
 
+  // torimatoのCSVは、同じ会社の複数契約を並べて出力する際、2行目以降の
+  // 会社名（顧客名）セルを空欄にする「グループ化された/セル結合されたエクスポート」
+  // 形式になっていることがある（会社名は会社＝Contract単位の情報であり、
+  // 契約ごとに変わる情報ではないため）。会社名が空欄の行を無条件にエラーとして
+  // 弾いてしまうと、その会社の2件目以降の契約行が全て無視され、実際には
+  // 複数契約あるのに1件しか取り込まれない（本Issueで報告された不具合）。
+  // そのため、会社名が空欄の行は直前の行の会社名を引き継ぐ（表計算ソフトで
+  // 結合セルを解除したときと同じ扱い）。数量・契約状態など契約明細ごとに
+  // 異なりうる項目はここでは引き継がない（別の契約の値を誤って適用しないため）。
+  let lastCompanyName = "";
+
   // 1. 各行を検証・パースする（この時点ではDBに書き込まない）
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const companyName = normalizeCompanyName(row.companyName || "");
-    const quantity = Number(row.quantity);
+    const rawCompanyName = normalizeCompanyName(row.companyName || "");
+    const companyName = rawCompanyName || lastCompanyName;
+    if (rawCompanyName) lastCompanyName = rawCompanyName;
+
+    // 数量が空欄の場合、Number("")は0になってしまい「数量0の正常な行」と
+    // 区別が付かなくなる（本来はエラーとして検知すべき欠損データ）。
+    // 空欄かどうかを明示的に判定してからNumberに変換する。
+    const quantityInput = row.quantity;
+    const quantityIsBlank =
+      quantityInput === undefined ||
+      quantityInput === null ||
+      (typeof quantityInput === "string" && quantityInput.trim() === "");
+    const quantity = quantityIsBlank ? NaN : Number(quantityInput);
     const contractType = (row.contractType || "").trim();
     const contractStatus = (row.contractStatus || "").trim();
 
